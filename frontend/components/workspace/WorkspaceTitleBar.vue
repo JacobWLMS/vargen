@@ -40,6 +40,46 @@
       style="background: transparent !important; border: none !important; color: var(--text-muted)"
     />
 
+    <!-- Pipeline picker modal -->
+    <div
+      v-if="pickerOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center"
+      style="background: rgba(0,0,0,0.7)"
+      @click.self="pickerOpen = false"
+    >
+      <div class="w-96 max-h-96 rounded overflow-hidden" style="background: var(--bg-panel); border: 1px solid var(--border)">
+        <div class="px-3 py-2 flex items-center" style="border-bottom: 1px solid var(--border)">
+          <span class="text-[12px] font-medium" style="color: var(--text-primary)">Load Pipeline</span>
+          <button @click="pickerOpen = false" class="ml-auto text-[14px]" style="color: var(--text-muted)">&times;</button>
+        </div>
+        <input
+          v-model="pickerFilter"
+          placeholder="Filter..."
+          class="w-full px-3 py-1.5 text-[12px]"
+          style="border: none !important; border-bottom: 1px solid var(--border) !important; border-radius: 0 !important"
+          ref="pickerInput"
+        />
+        <div class="max-h-72 overflow-y-auto">
+          <div
+            v-for="p in filteredPipelines"
+            :key="p.id"
+            @click="pickPipeline(p.id)"
+            class="px-3 py-2 cursor-pointer"
+            style="border-bottom: 1px solid var(--border)"
+            @mouseenter="($event.target as HTMLElement).style.background = 'var(--bg-hover)'"
+            @mouseleave="($event.target as HTMLElement).style.background = 'transparent'"
+          >
+            <p class="text-[12px]" style="color: var(--text-primary)">{{ p.name }}</p>
+            <p class="text-[10px] mt-0.5" style="color: var(--text-muted)">{{ p.description || p.id }} · {{ p.steps }} steps</p>
+            <div v-if="p.tags?.length" class="flex gap-1 mt-1">
+              <span v-for="tag in p.tags" :key="tag" class="text-[9px] px-1 py-0.5 rounded" style="background: var(--bg-active); color: var(--text-muted)">{{ tag }}</span>
+            </div>
+          </div>
+          <p v-if="!filteredPipelines.length" class="px-3 py-4 text-[11px] text-center" style="color: var(--text-muted)">No pipelines found</p>
+        </div>
+      </div>
+    </div>
+
     <!-- Spacer -->
     <div class="flex-1" />
 
@@ -64,6 +104,16 @@ import { useWorkspaceStore } from '~/stores/workspace'
 
 const store = useWorkspaceStore()
 const openMenu = ref('')
+const pickerOpen = ref(false)
+const pickerFilter = ref('')
+const pickerInput = ref<HTMLInputElement>()
+const allPipelines = ref<any[]>([])
+
+const filteredPipelines = computed(() =>
+  allPipelines.value.filter(p =>
+    !pickerFilter.value || p.name.toLowerCase().includes(pickerFilter.value.toLowerCase()) || p.id.includes(pickerFilter.value.toLowerCase())
+  )
+)
 
 const vramColor = computed(() => {
   if (!store.vramTotal) return '#444'
@@ -77,7 +127,7 @@ const menus = [
     items: [
       { label: 'New Pipeline', shortcut: '', action: () => { store.nodes = []; store.edges = []; store.pipelineName = 'untitled' } },
       { label: 'Save', shortcut: 'Ctrl+S', action: savePipeline },
-      { label: 'Load...', shortcut: '', action: loadPipeline },
+      { label: 'Load...', shortcut: '', action: openPicker },
     ],
   },
   {
@@ -108,15 +158,23 @@ async function savePipeline() {
   } catch {}
 }
 
-async function loadPipeline() {
+async function openPicker() {
   try {
     const res = await fetch('/api/pipelines')
-    const pipelines = await res.json()
-    // Simple: load first one for now. TODO: proper picker
-    if (pipelines.length) {
-      const data = await (await fetch(`/api/pipelines/${pipelines[0].id}`)).json()
-      store.fromYaml(data.yaml)
-    }
+    allPipelines.value = await res.json()
   } catch {}
+  pickerFilter.value = ''
+  pickerOpen.value = true
+  nextTick(() => pickerInput.value?.focus())
+}
+
+async function pickPipeline(id: string) {
+  try {
+    const res = await fetch(`/api/pipelines/${id}`)
+    const data = await res.json()
+    store.fromYaml(data.yaml)
+    store.pipelineName = id
+  } catch {}
+  pickerOpen.value = false
 }
 </script>
