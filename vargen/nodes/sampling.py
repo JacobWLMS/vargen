@@ -104,8 +104,24 @@ def exec_ksampler(inputs, widgets, ctx):
 
     log.info(f"KSampler: {steps}steps cfg={cfg} {sampler}/{scheduler} denoise={denoise} seed={seed} {width}x{height}")
 
+    # Move UNET to GPU for sampling
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if hasattr(pipe, 'unet') and pipe.unet is not None:
+        pipe.unet.to(device)
+        log.info(f"UNET on {device}")
+
     batch_size = int(widgets.get("batch_size", 1))
     guidance_rescale = float(widgets.get("guidance_rescale", 0.0))
+
+    # Move conditioning embeddings to GPU
+    if has_embeds and positive.get("prompt_embeds") is not None:
+        positive["prompt_embeds"] = positive["prompt_embeds"].to(device)
+        if "pooled_prompt_embeds" in positive and positive["pooled_prompt_embeds"] is not None:
+            positive["pooled_prompt_embeds"] = positive["pooled_prompt_embeds"].to(device)
+    if has_embeds and negative and negative.get("prompt_embeds") is not None:
+        negative["prompt_embeds"] = negative["prompt_embeds"].to(device)
+        if "pooled_prompt_embeds" in negative and negative["pooled_prompt_embeds"] is not None:
+            negative["pooled_prompt_embeds"] = negative["pooled_prompt_embeds"].to(device)
 
     kwargs = {
         "num_inference_steps": steps,
@@ -163,7 +179,16 @@ def exec_ksampler(inputs, widgets, ctx):
     if _original_layers is not None and hasattr(pipe, 'text_encoder'):
         pipe.text_encoder.config.num_hidden_layers = _original_layers
 
-    log.info(f"KSampler done: latent {latent.shape}")
+    # Offload UNET back to CPU
+    if hasattr(pipe, 'unet') and pipe.unet is not None:
+        pipe.unet.to('cpu')
+    import gc; gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    log.info(f"KSampler done: latent {latent.shape} | VRAM free: {torch.cuda.mem_get_info()[0] // (1024*1024)}MB" if torch.cuda.is_available() else f"KSampler done: {latent.shape}")
+
+    # Keep latent on CPU
+    latent = latent.cpu()
     return {"LATENT": latent, "_pipe": pipe}
 
 

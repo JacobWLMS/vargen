@@ -47,7 +47,7 @@ def exec_load_checkpoint(inputs, widgets, ctx):
 
     if is_flux or is_gguf:
         try:
-            pipe = _load_flux_checkpoint(model_path, is_gguf, torch_dtype)
+            pipe = _load_flux_checkpoint(model_path, is_gguf, torch_dtype, ctx.get("model_manager"))
             arch = "flux"
         except Exception as e:
             log.warning(f"FLUX load failed: {e}. Trying as SD checkpoint...")
@@ -57,15 +57,14 @@ def exec_load_checkpoint(inputs, widgets, ctx):
         pipe = _load_sd_checkpoint(model_path, torch_dtype)
         arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
 
-    # GGUF/FLUX on low VRAM needs aggressive offloading
-    if (is_gguf or is_flux) and offload_mode == "auto":
-        if torch.cuda.is_available():
-            free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-            if free_mb < 10000:
-                offload_mode = "model_cpu"
-                log.info(f"FLUX/GGUF on {free_mb}MB VRAM: using model CPU offload")
-
-    _setup_vram_offload(pipe, offload_mode)
+    # Default: keep everything on CPU. Each node moves what it needs to GPU.
+    # This is the key to running on 8GB — only one component in VRAM at a time.
+    if offload_mode == "auto":
+        log.info("Offload: per-node (components stay on CPU, moved to GPU per-node)")
+        # Don't call any offload method — pipe stays on CPU
+        # Individual nodes (CLIP encode, KSampler, VAE decode) handle their own GPU
+    else:
+        _setup_vram_offload(pipe, offload_mode)
 
     if attn_slicing and hasattr(pipe, "enable_attention_slicing"):
         pipe.enable_attention_slicing()
@@ -95,7 +94,7 @@ def exec_load_checkpoint(inputs, widgets, ctx):
     }
 
 
-def _load_flux_checkpoint(model_path, is_gguf, torch_dtype):
+def _load_flux_checkpoint(model_path, is_gguf, torch_dtype, mm=None):
     from diffusers import FluxPipeline
 
     if is_gguf:
@@ -113,8 +112,8 @@ def _load_flux_checkpoint(model_path, is_gguf, torch_dtype):
         from transformers import T5EncoderModel, CLIPTextModel
 
         extra_kwargs = {}
-        if model_manager:
-            t5_path = (model_manager.find_model("text_encoders", "t5xxl_fp8_e4m3fn.safetensors")
+        if mm:
+            t5_path = (mm.find_model("text_encoders", "t5xxl_fp8_e4m3fn.safetensors")
                        or model_manager.find_model("text_encoders", "t5xxl_fp16.safetensors"))
             if t5_path:
                 log.info(f"Using local T5 encoder: {t5_path.name}")
