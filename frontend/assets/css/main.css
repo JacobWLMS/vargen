@@ -87,3 +87,19 @@ input:focus, select:focus, textarea:focus {
   color: var(--error);
 }
 .btn-danger:hover { background: rgba(248, 81, 73, 0.1); }
+
+/* Resize handles */
+.resize-handle {
+  position: absolute;
+  background: transparent;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.resize-handle:hover, .resize-handle:active {
+  background: var(--accent);
+  opacity: 0.4;
+}
+.resize-handle-right { right: 0; top: 0; bottom: 0; width: 3px; cursor: ew-resize; }
+.resize-handle-left { left: 0; top: 0; bottom: 0; width: 3px; cursor: ew-resize; }
+.resize-handle-top { left: 0; right: 0; top: 0; height: 3px; cursor: ns-resize; }
+.resize-handle-bottom { left: 0; right: 0; bottom: 0; height: 3px; cursor: ns-resize; }

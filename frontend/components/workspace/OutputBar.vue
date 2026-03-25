@@ -1,5 +1,5 @@
 <template>
-  <div class="h-48 shrink-0 flex" style="background: var(--bg-secondary); border-top: 1px solid var(--border)">
+  <div class="h-full flex" style="background: var(--bg-secondary)">
     <!-- Progress + thumbnails -->
     <div class="flex-1 overflow-hidden flex flex-col">
       <!-- Step progress -->

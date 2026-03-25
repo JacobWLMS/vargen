@@ -52,6 +52,16 @@ export const useWorkspaceStore = defineStore('workspace', {
     assetPanelOpen: true,
     propertiesPanelOpen: true,
     outputBarOpen: true,
+    consoleOpen: true,
+
+    // Panel sizes
+    assetPanelWidth: 240,
+    propertiesPanelWidth: 288,
+    bottomPanelHeight: 200,
+    bottomTab: 'output' as 'output' | 'console',
+
+    // Console
+    consoleLogs: [] as { time: string; level: string; message: string }[],
 
     // Models
     modelInventory: {} as Record<string, any[]>,
@@ -238,6 +248,13 @@ export const useWorkspaceStore = defineStore('workspace', {
       } catch {}
     },
 
+    log(level: string, message: string) {
+      const now = new Date()
+      const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+      this.consoleLogs.push({ time, level, message })
+      if (this.consoleLogs.length > 500) this.consoleLogs.shift()
+    },
+
     // ── Execution ────────────────────────────
 
     async run() {
@@ -248,6 +265,9 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.stepDurations = {}
 
       const yaml = this.toYaml()
+      this.log('info', `Starting pipeline: ${this.pipelineName}`)
+      this.log('info', `${this.nodes.length} steps, input: ${this.inputImage?.filename || 'none'}`)
+
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(`${proto}://${location.host}/api/ws/run`)
 
@@ -256,6 +276,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           pipeline_yaml: yaml,
           image_filename: this.inputImage?.filename,
         }))
+        this.log('info', 'Connected to engine')
       }
 
       ws.onmessage = (event) => {
@@ -263,34 +284,54 @@ export const useWorkspaceStore = defineStore('workspace', {
         switch (data.event) {
           case 'step_start':
             this.stepStatuses[data.step] = 'running'
+            this.log('info', `Running: ${data.step} (${data.index + 1}/${data.total})`)
             break
           case 'step_done':
             this.stepStatuses[data.step] = 'done'
             this.stepDurations[data.step] = data.duration
+            this.log('info', `Done: ${data.step} (${data.duration.toFixed(1)}s)`)
             if (data.url) this.outputs.push({ url: data.url, step: data.step, timestamp: Date.now() })
             if (data.urls) {
+              this.log('info', `  ${data.urls.length} images generated`)
               for (const url of data.urls) {
                 this.outputs.push({ url, step: data.step, timestamp: Date.now() })
               }
             }
+            if (data.text) this.log('info', `  Caption: ${data.text.slice(0, 200)}`)
             if (this.outputs.length) this.selectedOutputIndex = this.outputs.length - 1
+            break
+          case 'batch_progress':
+            this.log('info', `  Batch: ${data.index + 1}/${data.total}`)
             break
           case 'complete':
             this.running = false
+            this.log('info', 'Pipeline complete')
             ws.close()
             break
           case 'cancelled':
             this.running = false
+            this.log('warn', 'Pipeline cancelled')
             ws.close()
             break
           case 'error':
             this.running = false
+            this.log('error', `Error: ${data.message}`)
             ws.close()
             break
         }
       }
 
-      ws.onerror = () => { this.running = false }
+      ws.onerror = () => {
+        this.running = false
+        this.log('error', 'WebSocket connection failed')
+      }
+
+      ws.onclose = (event) => {
+        if (this.running) {
+          this.running = false
+          this.log('error', `Connection closed unexpectedly (code: ${event.code})`)
+        }
+      }
     },
 
     async cancel() {
