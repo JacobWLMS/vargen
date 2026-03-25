@@ -1,16 +1,16 @@
 {
   "name": "FLUX txt2img",
-  "description": "FLUX.1-dev text to image — uses FLUX Sampler (no separate VAE decode needed)",
+  "description": "FLUX.1-dev text to image — select any FLUX checkpoint (GGUF, safetensors)",
   "nodes": {
-    "flux": {
-      "type": "load_flux",
-      "widgets": { "model": "" },
+    "checkpoint": {
+      "type": "load_checkpoint",
+      "widgets": { "checkpoint": "" },
       "x": 50, "y": 200
     },
     "sampler": {
       "type": "flux_sampler",
-      "widgets": { "seed": -1, "steps": 20, "guidance": 3.5, "width": 1024, "height": 1024 },
-      "x": 400, "y": 200
+      "widgets": { "prompt": "a beautiful photograph of a landscape, golden hour, 8k", "seed": -1, "steps": 20, "guidance": 3.5, "width": 1024, "height": 1024, "max_sequence_length": 512 },
+      "x": 400, "y": 150
     },
     "save": {
       "type": "save_image",
@@ -19,7 +19,7 @@
     }
   },
   "edges": [
-    { "from_node": "flux", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
+    { "from_node": "checkpoint", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
     { "from_node": "sampler", "from_port": "IMAGE", "to_node": "save", "to_port": "IMAGE" }
   ]
 }

@@ -14,3 +14,5 @@ pyyaml>=6.0
 sentencepiece>=0.2.0
 protobuf>=4.25.0
 qwen-vl-utils>=0.0.8
+gguf>=0.10.0
+opencv-python-headless>=4.8.0

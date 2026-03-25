@@ -1,18 +1,18 @@
 {
   "name": "FLUX txt2img + Upscale",
-  "description": "FLUX generation followed by RealESRGAN 2x upscale",
+  "description": "FLUX generation then RealESRGAN 2x upscale",
   "nodes": {
-    "flux": {
-      "type": "load_flux",
-      "widgets": { "model": "" },
+    "checkpoint": {
+      "type": "load_checkpoint",
+      "widgets": { "checkpoint": "" },
       "x": 50, "y": 200
     },
     "sampler": {
       "type": "flux_sampler",
-      "widgets": { "seed": -1, "steps": 20, "guidance": 3.5, "width": 1024, "height": 1024 },
-      "x": 400, "y": 200
+      "widgets": { "prompt": "a stunning photograph, professional lighting, 8k resolution", "seed": -1, "steps": 20, "guidance": 3.5, "width": 1024, "height": 1024, "max_sequence_length": 512 },
+      "x": 400, "y": 150
     },
-    "upscale_model": {
+    "upscale_loader": {
       "type": "load_upscale_model",
       "widgets": { "model": "" },
       "x": 400, "y": 420
@@ -29,9 +29,9 @@
     }
   },
   "edges": [
-    { "from_node": "flux", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
+    { "from_node": "checkpoint", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
     { "from_node": "sampler", "from_port": "IMAGE", "to_node": "upscale", "to_port": "IMAGE" },
-    { "from_node": "upscale_model", "from_port": "UPSCALE_MODEL", "to_node": "upscale", "to_port": "UPSCALE_MODEL" },
+    { "from_node": "upscale_loader", "from_port": "UPSCALE_MODEL", "to_node": "upscale", "to_port": "UPSCALE_MODEL" },
     { "from_node": "upscale", "from_port": "IMAGE", "to_node": "save", "to_port": "IMAGE" }
   ]
 }
