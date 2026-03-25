@@ -1,0 +1,69 @@
+{
+  "name": "txt2img + FreeU + IP-Adapter",
+  "description": "Identity-preserving generation with FreeU quality enhancement",
+  "nodes": {
+    "load_checkpoint": {
+      "type": "load_checkpoint",
+      "widgets": { "checkpoint": "gonzalomoXLFluxPony_v60PhotoXLDMD.safetensors" },
+      "x": 50, "y": 200
+    },
+    "load_image": {
+      "type": "load_image",
+      "widgets": {},
+      "x": 50, "y": 450
+    },
+    "load_ip_adapter": {
+      "type": "load_ip_adapter",
+      "widgets": { "preset": "ip-adapter-plus-face_sdxl", "weight": 0.85 },
+      "x": 320, "y": 100
+    },
+    "apply_ip_adapter": {
+      "type": "apply_ip_adapter",
+      "widgets": { "weight": 0.85 },
+      "x": 320, "y": 300
+    },
+    "freeu": {
+      "type": "freeu",
+      "widgets": { "b1": 1.1, "b2": 1.2, "s1": 0.6, "s2": 0.4 },
+      "x": 590, "y": 200
+    },
+    "positive": {
+      "type": "clip_text_encode",
+      "widgets": { "text": "sexy blonde woman in lingerie" },
+      "x": 590, "y": 400
+    },
+    "latent": {
+      "type": "empty_latent",
+      "widgets": { "width": 512, "height": 512, "batch_size": 1 },
+      "x": 590, "y": 580
+    },
+    "sampler": {
+      "type": "ksampler",
+      "widgets": { "seed": 564763543, "steps": 25, "cfg": 1, "sampler": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0 },
+      "x": 860, "y": 250
+    },
+    "vae_decode": {
+      "type": "vae_decode",
+      "widgets": {},
+      "x": 1130, "y": 300
+    },
+    "save": {
+      "type": "save_image",
+      "widgets": { "filename_prefix": "freeu_ipa" },
+      "x": 1350, "y": 300
+    }
+  },
+  "edges": [
+    { "from_node": "load_checkpoint", "from_port": "MODEL", "to_node": "load_ip_adapter", "to_port": "MODEL" },
+    { "from_node": "load_ip_adapter", "from_port": "MODEL", "to_node": "apply_ip_adapter", "to_port": "MODEL" },
+    { "from_node": "load_image", "from_port": "IMAGE", "to_node": "apply_ip_adapter", "to_port": "IMAGE" },
+    { "from_node": "apply_ip_adapter", "from_port": "MODEL", "to_node": "freeu", "to_port": "MODEL" },
+    { "from_node": "freeu", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
+    { "from_node": "load_checkpoint", "from_port": "CLIP", "to_node": "positive", "to_port": "CLIP" },
+    { "from_node": "positive", "from_port": "CONDITIONING", "to_node": "sampler", "to_port": "POSITIVE" },
+    { "from_node": "latent", "from_port": "LATENT", "to_node": "sampler", "to_port": "LATENT" },
+    { "from_node": "load_checkpoint", "from_port": "VAE", "to_node": "vae_decode", "to_port": "VAE" },
+    { "from_node": "sampler", "from_port": "LATENT", "to_node": "vae_decode", "to_port": "LATENT" },
+    { "from_node": "vae_decode", "from_port": "IMAGE", "to_node": "save", "to_port": "IMAGE" }
+  ]
+}
