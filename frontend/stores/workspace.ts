@@ -60,6 +60,13 @@ export const useWorkspaceStore = defineStore('workspace', {
     bottomPanelHeight: 200,
     bottomTab: 'output' as 'output' | 'console',
 
+    // YAML panel
+    yamlPanelOpen: false,
+    yamlPanelWidth: 400,
+
+    // Node type definitions (from API)
+    nodeTypes: {} as Record<string, any>,
+
     // Console
     consoleLogs: [] as { time: string; level: string; message: string }[],
 
@@ -237,6 +244,13 @@ export const useWorkspaceStore = defineStore('workspace', {
       } catch {}
     },
 
+    async loadNodeTypes() {
+      try {
+        const res = await fetch('/api/node-types')
+        if (res.ok) this.nodeTypes = await res.json()
+      } catch {}
+    },
+
     async loadVram() {
       try {
         const res = await fetch('/api/models/status')
@@ -256,6 +270,79 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     // ── Execution ────────────────────────────
+
+    async runGraph() {
+      if (this.running) return
+      this.running = true
+      this.outputs = []
+      this.stepStatuses = {}
+      this.stepDurations = {}
+      this.log('info', `Executing graph: ${this.nodes.length} nodes`)
+
+      // Build graph payload for the executor
+      const graph: any = { nodes: {}, edges: [] }
+      for (const node of this.nodes) {
+        graph.nodes[node.id] = {
+          type: node.type,
+          widgets: { ...node.params },
+        }
+      }
+      for (const edge of this.edges) {
+        graph.edges.push({
+          from_node: edge.from,
+          from_port: edge.param, // port name on source
+          to_node: edge.to,
+          to_port: edge.param,   // port name on target
+        })
+      }
+
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+      const ws = new WebSocket(`${proto}://${location.host}/api/ws/graph`)
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ graph, image_filename: this.inputImage?.filename }))
+        this.log('info', 'Connected to graph executor')
+      }
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data)
+        const nodeId = data.node_id
+        switch (data.event) {
+          case 'node_start':
+            this.stepStatuses[nodeId] = 'running'
+            this.log('info', `[${data.index + 1}/${data.total}] Running: ${data.type}`)
+            break
+          case 'node_done':
+            this.stepStatuses[nodeId] = data.error ? 'error' : 'done'
+            this.stepDurations[nodeId] = data.duration
+            if (data.error) this.log('error', `  ${data.type}: ${data.error}`)
+            else this.log('info', `  ${data.type}: ${data.duration.toFixed(1)}s`)
+            if (data.image_url) {
+              this.outputs.push({ url: data.image_url, step: nodeId, timestamp: Date.now() })
+              this.selectedOutputIndex = this.outputs.length - 1
+            }
+            break
+          case 'complete':
+            this.running = false
+            this.log('info', 'Graph execution complete')
+            ws.close()
+            break
+          case 'cancelled':
+            this.running = false
+            this.log('warn', 'Cancelled')
+            ws.close()
+            break
+          case 'error':
+            this.running = false
+            this.log('error', data.message)
+            ws.close()
+            break
+        }
+      }
+
+      ws.onerror = () => { this.running = false; this.log('error', 'WebSocket failed') }
+      ws.onclose = (e) => { if (this.running) { this.running = false; this.log('error', `Connection lost (${e.code})`) } }
+    },
 
     async run() {
       if (this.running) return

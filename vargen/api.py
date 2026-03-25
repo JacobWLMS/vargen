@@ -19,6 +19,11 @@ import io
 from .schema import load_pipeline
 from .config import Config, browse_models
 from .engine import create_engine, CancelledError
+from .nodes import get_all_node_types, get_node_types_by_category
+from .nodes.executor import GraphExecutor, CancelledError as GraphCancelledError
+
+# Import node modules to trigger registration
+from .nodes import loaders, conditioning, sampling, image as image_nodes
 
 log = logging.getLogger(__name__)
 
@@ -148,6 +153,104 @@ async def check_models(req: SavePipelineRequest):
 async def download_progress():
     """Get active download progress."""
     return _engine.mm.downloads.get_all()
+
+
+# ── Node Types ─────────────────────────────────────────────────
+
+@app.get("/api/node-types")
+async def list_node_types():
+    """Return all registered node types with their port and widget definitions."""
+    result = {}
+    for type_id, node_def in get_all_node_types().items():
+        result[type_id] = {
+            "type_id": node_def.type_id,
+            "category": node_def.category,
+            "label": node_def.label,
+            "description": node_def.description,
+            "color": node_def.color,
+            "inputs": [{"name": p.name, "type": p.type, "optional": p.optional} for p in node_def.inputs],
+            "outputs": [{"name": p.name, "type": p.type} for p in node_def.outputs],
+            "widgets": [{
+                "name": w.name, "type": w.type, "default": w.default,
+                "options": w.options, "min": w.min, "max": w.max, "step": w.step,
+                "label": w.label or w.name,
+            } for w in node_def.widgets],
+        }
+    return result
+
+
+@app.get("/api/node-types/categories")
+async def node_types_by_category():
+    categories = {}
+    for cat, nodes in get_node_types_by_category().items():
+        categories[cat] = [{"type_id": n.type_id, "label": n.label, "color": n.color, "description": n.description} for n in nodes]
+    return categories
+
+
+# ── Graph Execution ────────────────────────────────────────────
+
+_graph_executor: GraphExecutor | None = None
+
+def get_graph_executor():
+    global _graph_executor
+    if _graph_executor is None:
+        _graph_executor = GraphExecutor(_engine.mm)
+    return _graph_executor
+
+
+class GraphRunRequest(BaseModel):
+    graph: dict
+    image_filename: Optional[str] = None
+
+
+@app.websocket("/api/ws/graph")
+async def run_graph_ws(ws: WebSocket):
+    """Execute a node graph with live progress."""
+    await ws.accept()
+    try:
+        data = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+
+    executor = get_graph_executor()
+    input_image = _load_input_image(data.get("image_filename"))
+    loop = asyncio.get_event_loop()
+
+    async def send(msg):
+        try: await ws.send_json(msg)
+        except: pass
+
+    def on_start(nid, node, idx, total):
+        asyncio.run_coroutine_threadsafe(
+            send({"event": "node_start", "node_id": nid, "type": node["type"], "index": idx, "total": total}), loop)
+
+    def on_done(nid, node, result, duration, error):
+        msg = {"event": "node_done", "node_id": nid, "type": node["type"], "duration": duration}
+        if error:
+            msg["error"] = error
+        elif result:
+            # Check for saved images
+            if "_saved_url" in result:
+                msg["image_url"] = result["_saved_url"]
+            elif isinstance(result.get("IMAGE"), Image):
+                # Auto-save preview
+                ts = int(time.time())
+                path = OUTPUT_DIR / f"preview_{nid}_{ts}.png"
+                result["IMAGE"].save(path)
+                msg["image_url"] = f"/api/outputs/{path.name}"
+        asyncio.run_coroutine_threadsafe(send(msg), loop)
+
+    try:
+        await loop.run_in_executor(None, lambda: executor.execute(
+            data["graph"], input_image=input_image,
+            on_node_start=on_start, on_node_done=on_done,
+        ))
+        await ws.send_json({"event": "complete"})
+    except GraphCancelledError:
+        await ws.send_json({"event": "cancelled"})
+    except Exception as e:
+        await ws.send_json({"event": "error", "message": str(e)})
+    await ws.close()
 
 
 # ── Upload ─────────────────────────────────────────────────────

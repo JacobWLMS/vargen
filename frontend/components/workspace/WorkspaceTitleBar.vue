@@ -83,6 +83,13 @@
     <!-- Spacer -->
     <div class="flex-1" />
 
+    <!-- YAML toggle -->
+    <button
+      @click="store.yamlPanelOpen = !store.yamlPanelOpen"
+      class="px-2 py-0.5 text-[11px] rounded"
+      :style="store.yamlPanelOpen ? 'background: var(--bg-active); color: var(--text-primary)' : 'color: var(--text-muted)'"
+    >YAML</button>
+
     <!-- VRAM -->
     <div class="flex items-center gap-1.5 text-[11px] mono" style="color: var(--text-muted)">
       <div class="w-1.5 h-1.5 rounded-full" :style="{ background: vramColor }" />

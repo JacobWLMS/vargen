@@ -103,14 +103,13 @@ const connectMouse = reactive({ x: 0, y: 0 })
 // Quick-add menu
 const quickAdd = reactive({ open: false, x: 0, y: 0, canvasX: 0, canvasY: 0 })
 
-const quickAddTypes = [
-  { type: 'vision-llm', color: '#5eead4' },
-  { type: 'txt2img', color: '#e88a2a' },
-  { type: 'img2img', color: '#a882ff' },
-  { type: 'pixel-upscale', color: '#60a5fa' },
-  { type: 'inpaint', color: '#f472b6' },
-  { type: 'face-detail', color: '#fb923c' },
-]
+const quickAddTypes = computed(() => {
+  return Object.values(store.nodeTypes).map((nt: any) => ({
+    type: nt.type_id,
+    label: nt.label,
+    color: nt.color,
+  }))
+})
 
 const surfaceStyle = computed(() => ({
   transform: `translate(${store.pan.x}px, ${store.pan.y}px) scale(${store.zoom})`,
@@ -210,29 +209,26 @@ function onDrop(e: DragEvent) {
   const x = (e.clientX - rect.left - store.pan.x) / store.zoom
   const y = (e.clientY - rect.top - store.pan.y) / store.zoom
 
-  // Handle step type drop
-  const stepType = e.dataTransfer?.getData('application/vargen-step')
-  if (stepType) {
-    const node = store.addNode(stepType, x, y)
-    if (store.nodes.length > 1) {
-      const prev = store.nodes[store.nodes.length - 2]
-      store.addEdge(prev.id, node.id, 'input')
-    }
+  // Handle node type drop
+  const nodeType = e.dataTransfer?.getData('vargen/node-type')
+  if (nodeType) {
+    store.addNode(nodeType, x, y)
     return
   }
 
-  // Handle model drop
-  const modelData = e.dataTransfer?.getData('application/vargen-model')
+  // Handle model drop — create appropriate loader node
+  const modelData = e.dataTransfer?.getData('vargen/model')
   if (modelData) {
     const model = JSON.parse(modelData)
-    // Determine step type from model category
-    const typeMap: Record<string, string> = {
-      checkpoints: 'txt2img', diffusion_models: 'txt2img', upscale_models: 'pixel-upscale',
-      loras: 'txt2img', controlnet: 'txt2img',
+    const loaderMap: Record<string, string> = {
+      checkpoints: 'load_checkpoint', diffusion_models: 'load_checkpoint',
+      upscale_models: 'load_upscale_model', loras: 'load_lora',
     }
-    const type = typeMap[model.category] || 'txt2img'
-    const node = store.addNode(type, x, y)
-    node.model = model.name
+    const nodeType = loaderMap[model.category] || 'load_checkpoint'
+    const node = store.addNode(nodeType, x, y)
+    // Set the model widget
+    const widgetKey = { load_checkpoint: 'checkpoint', load_lora: 'lora', load_upscale_model: 'model' }[nodeType] || 'checkpoint'
+    node.params[widgetKey] = model.name
     return
   }
 

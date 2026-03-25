@@ -148,6 +148,20 @@ class ModelManager:
         """Browse all models across configured paths."""
         return browse_models(self.config.model_paths)
 
+    def find_model(self, category: str, filename: str) -> Optional[Path]:
+        """Find a model file by category and filename across all search paths."""
+        for sp in self.search_paths:
+            cat_dir = sp / category
+            if cat_dir.exists():
+                for match in cat_dir.rglob(filename):
+                    if match.is_file():
+                        return match
+            # Also search root of search path
+            for match in sp.rglob(filename):
+                if match.is_file():
+                    return match
+        return None
+
     def status(self) -> dict:
         return {
             "cache_dir": str(self.cache_dir),
