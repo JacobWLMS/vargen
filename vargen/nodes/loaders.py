@@ -203,22 +203,42 @@ def exec_load_checkpoint(inputs, widgets, ctx):
     else:
         kwargs = {"torch_dtype": torch_dtype}
         try:
+            log.info("Trying SDXL pipeline...")
             pipe = StableDiffusionXLPipeline.from_single_file(str(path), **kwargs)
             arch = "sdxl"
-        except Exception:
-            pipe = StableDiffusionPipeline.from_single_file(str(path), **kwargs)
-            arch = "sd15"
+        except Exception as e1:
+            log.info(f"SDXL from_single_file failed: {e1}")
+            # Try with AutoPipelineForText2Image which is more forgiving
+            try:
+                from diffusers import AutoPipelineForText2Image
+                log.info("Trying AutoPipeline...")
+                pipe = AutoPipelineForText2Image.from_single_file(str(path), **kwargs)
+                arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
+            except Exception as e2:
+                try:
+                    log.info("Trying SD1.5 pipeline...")
+                    pipe = StableDiffusionPipeline.from_single_file(str(path), **kwargs)
+                    arch = "sd15"
+                except Exception as e3:
+                    raise ValueError(f"Failed to load checkpoint.\nSDXL: {e1}\nAuto: {e2}\nSD1.5: {e3}")
 
     # Move EVERYTHING to CPU — each downstream node moves what it needs to GPU
-    for comp_name, component in pipe.components.items():
-        if hasattr(component, 'to'):
-            try:
-                component.to('cpu')
-            except Exception:
-                pass
+    try:
+        for comp_name, component in pipe.components.items():
+            if hasattr(component, 'to'):
+                try:
+                    component.to('cpu')
+                except Exception:
+                    pass
+    except Exception as e:
+        log.warning(f"pipe.components iteration failed: {e}, moving pipe directly")
+        try:
+            pipe.to('cpu')
+        except Exception:
+            pass
     _flush()
 
-    unet = pipe.unet if hasattr(pipe, 'unet') else getattr(pipe, 'transformer', None)
+    unet = getattr(pipe, 'unet', None) or getattr(pipe, 'transformer', None)
     log.info(f"Loaded {arch} checkpoint. All components on CPU.")
 
     return {
