@@ -5,7 +5,7 @@ tags: ["nsfw", "portrait", "studio", "flux"]
 
 models:
   qwen-vl:
-    repo: "huchukato/Qwen3-VL-8B-Instruct-Abliterated"
+    repo: "Qwen/Qwen2.5-VL-7B-Instruct"
     vram_mb: 4800
 
   flux-dev:
