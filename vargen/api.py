@@ -14,6 +14,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from PIL import Image
+import torch
+import gc
 import io
 
 from .schema import load_pipeline
@@ -24,6 +26,8 @@ from .nodes.executor import GraphExecutor, CancelledError as GraphCancelledError
 
 # Import node modules to trigger registration
 from .nodes import loaders, conditioning, sampling, latent as latent_nodes, image as image_nodes
+from .nodes import controlnet as controlnet_nodes, ipadapter as ipadapter_nodes
+from .nodes import inpaint as inpaint_nodes, flux as flux_nodes
 
 log = logging.getLogger(__name__)
 
@@ -300,8 +304,21 @@ async def run_graph_ws(ws: WebSocket):
     except GraphCancelledError:
         await ws.send_json({"event": "cancelled"})
     except Exception as e:
-        await ws.send_json({"event": "error", "message": str(e)})
-    await ws.close()
+        log.error(f"Graph execution error: {e}")
+        try:
+            await ws.send_json({"event": "error", "message": str(e)})
+        except Exception:
+            pass  # WebSocket might already be closed
+    finally:
+        # Always cleanup VRAM after execution
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 # ── Upload ─────────────────────────────────────────────────────

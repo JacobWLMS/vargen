@@ -132,6 +132,8 @@ function getComboOptions(w: any): string[] {
   if (w.name === 'checkpoint') return getModelNames('checkpoints', 'diffusion_models')
   if (w.name === 'lora') return getModelNames('loras')
   if (w.name === 'model' && props.node.type === 'load_upscale_model') return getModelNames('upscale_models')
+  if (w.name === 'model' && props.node.type === 'load_controlnet') return getModelNames('controlnet')
+  if (w.name === 'model' && props.node.type === 'load_flux') return getModelNames('diffusion_models', 'checkpoints')
   return w.options || []
 }
 function getModelNames(...cats: string[]): string[] {

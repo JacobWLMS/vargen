@@ -1,8 +1,9 @@
-"""Graph executor — topologically sorts and executes node graphs."""
+"""Graph executor — topologically sorts and executes node graphs with OOM protection."""
 
 import gc
 import logging
 import time
+import traceback
 from typing import Callable, Optional
 
 import torch
@@ -13,8 +14,12 @@ from . import get_node_type
 log = logging.getLogger(__name__)
 
 
+class CancelledError(Exception):
+    pass
+
+
 class GraphExecutor:
-    """Execute a node graph with typed port connections."""
+    """Execute a node graph with typed port connections and VRAM protection."""
 
     def __init__(self, model_manager):
         self.mm = model_manager
@@ -30,22 +35,6 @@ class GraphExecutor:
         on_node_start: Optional[Callable] = None,
         on_node_done: Optional[Callable] = None,
     ) -> dict:
-        """Execute a node graph.
-
-        graph format:
-        {
-            "nodes": {
-                "node_id": {"type": "load_checkpoint", "widgets": {"checkpoint": "model.safetensors"}, "x": 0, "y": 0},
-                ...
-            },
-            "edges": [
-                {"from_node": "n1", "from_port": "MODEL", "to_node": "n2", "to_port": "MODEL"},
-                ...
-            ]
-        }
-
-        Returns dict of {node_id: {port_name: value}} for all executed nodes.
-        """
         self._cancelled = False
         nodes = graph["nodes"]
         edges = graph.get("edges", [])
@@ -55,7 +44,7 @@ class GraphExecutor:
         for edge in edges:
             deps[edge["to_node"]].add(edge["from_node"])
 
-        # Topological sort (Kahn's algorithm)
+        # Topological sort
         order = []
         in_degree = {nid: len(d) for nid, d in deps.items()}
         queue = [nid for nid, deg in in_degree.items() if deg == 0]
@@ -70,19 +59,15 @@ class GraphExecutor:
                         queue.append(other_nid)
 
         if len(order) != len(nodes):
-            raise ValueError("Graph has cycles — cannot execute")
+            raise ValueError("Graph has cycles")
 
-        # Execute in order
         outputs: dict[str, dict] = {}
-        ctx = {
-            "model_manager": self.mm,
-            "input_image": input_image,
-        }
+        ctx = {"model_manager": self.mm, "input_image": input_image}
 
         for idx, nid in enumerate(order):
             if self._cancelled:
                 self._cleanup()
-                raise CancelledError("Execution cancelled")
+                raise CancelledError("Cancelled")
 
             node_def_id = nodes[nid]["type"]
             node_type = get_node_type(node_def_id)
@@ -92,35 +77,43 @@ class GraphExecutor:
             if on_node_start:
                 on_node_start(nid, nodes[nid], idx, len(order))
 
-            # Collect inputs from connected edges
+            # Collect inputs
             node_inputs = {}
             for edge in edges:
                 if edge["to_node"] == nid:
-                    src_outputs = outputs.get(edge["from_node"], {})
-                    value = src_outputs.get(edge["from_port"])
+                    src = outputs.get(edge["from_node"], {})
+                    value = src.get(edge["from_port"])
                     node_inputs[edge["to_port"]] = value
-                    # Also pass through internal state like _pipe
-                    if "_pipe" in src_outputs:
-                        node_inputs["_pipe"] = src_outputs["_pipe"]
-                    if "_width" in src_outputs:
-                        node_inputs["_width"] = src_outputs["_width"]
-                    if "_height" in src_outputs:
-                        node_inputs["_height"] = src_outputs["_height"]
+                    # Pass through internal state
+                    for key in ("_pipe", "_width", "_height", "_cn_image", "_cn_strength",
+                                "_cn_start", "_cn_end", "_ip_adapter_image", "_ip_adapter_loaded", "_arch"):
+                        if key in src:
+                            node_inputs[key] = src[key]
 
-            # Get widget values
             widget_values = nodes[nid].get("widgets", {})
 
-            # Execute
+            # Execute with OOM protection
             t0 = time.time()
             try:
                 result = node_type.execute(node_inputs, widget_values, ctx)
-            except Exception as e:
-                log.error(f"Node {nid} ({node_def_id}) failed: {e}")
+            except torch.cuda.OutOfMemoryError:
+                self._cleanup()
+                error_msg = f"Out of VRAM on node {nid} ({node_def_id}). Try reducing resolution, batch size, or use a quantized model."
+                log.error(error_msg)
                 if on_node_done:
-                    on_node_done(nid, nodes[nid], None, time.time() - t0, str(e))
-                raise
-            duration = time.time() - t0
+                    on_node_done(nid, nodes[nid], None, time.time() - t0, error_msg)
+                raise RuntimeError(error_msg)
+            except Exception as e:
+                # Don't crash the server — log and report
+                error_msg = f"{node_def_id}: {str(e)}"
+                log.error(f"Node {nid} failed: {error_msg}")
+                log.debug(traceback.format_exc())
+                self._cleanup()
+                if on_node_done:
+                    on_node_done(nid, nodes[nid], None, time.time() - t0, error_msg)
+                raise RuntimeError(error_msg)
 
+            duration = time.time() - t0
             outputs[nid] = result
             log.info(f"  [{idx+1}/{len(order)}] {nid} ({node_def_id}): {duration:.1f}s")
 
@@ -130,10 +123,15 @@ class GraphExecutor:
         return outputs
 
     def _cleanup(self):
+        """Emergency VRAM cleanup."""
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        log.info(f"Cleanup done. VRAM free: {self._vram_free()}MB")
 
-
-class CancelledError(Exception):
-    pass
+    def _vram_free(self) -> int:
+        if torch.cuda.is_available():
+            free, _ = torch.cuda.mem_get_info()
+            return int(free / 1024 / 1024)
+        return 0
