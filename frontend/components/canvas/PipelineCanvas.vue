@@ -41,7 +41,7 @@
         :duration="store.stepDurations[node.name]"
         @select="store.selectedNodeId = node.id"
         @move="(dx, dy) => onNodeDrag(node.id, dx, dy)"
-        @start-connect="onStartConnect(node.id, $event)"
+        @start-connect="(port, ev) => onStartConnect(node.id, port, ev)"
       />
 
       <!-- Connection being drawn -->
@@ -98,6 +98,7 @@ const panStart = { x: 0, y: 0 }
 // Connection drawing state
 const connecting = ref(false)
 const connectFrom = ref('')
+const connectFromPort = ref('')
 const connectMouse = reactive({ x: 0, y: 0 })
 
 // Quick-add menu
@@ -161,11 +162,46 @@ function onMouseMove(e: MouseEvent) {
   }
 }
 
-function onMouseUp() {
+function onMouseUp(e: MouseEvent) {
   isPanning.value = false
   if (connecting.value) {
     connecting.value = false
-    // TODO: check if dropped on a node port
+
+    // Find if mouse is over a node's input port area (left side of a node)
+    const rect = viewport.value!.getBoundingClientRect()
+    const canvasX = (e.clientX - rect.left - store.pan.x) / store.zoom
+    const canvasY = (e.clientY - rect.top - store.pan.y) / store.zoom
+
+    for (const node of store.nodes) {
+      if (node.id === connectFrom.value) continue // can't connect to self
+
+      // Check if cursor is near the left side of this node (input port area)
+      const nodeLeft = node.x
+      const nodeTop = node.y
+      const nodeHeight = 100 // approximate
+      const portZone = 30
+
+      if (canvasX >= nodeLeft - portZone && canvasX <= nodeLeft + portZone &&
+          canvasY >= nodeTop && canvasY <= nodeTop + nodeHeight + 60) {
+        // Find a compatible input port
+        const targetDef = store.nodeTypes[node.type]
+        const sourceDef = store.nodeTypes[store.nodeById(connectFrom.value)?.type || '']
+        const sourceOutput = sourceDef?.outputs?.find((p: any) => p.name === connectFromPort.value)
+
+        if (targetDef?.inputs && sourceOutput) {
+          const targetPort = targetDef.inputs.find((p: any) => p.type === sourceOutput.type)
+          if (targetPort) {
+            store.addEdge(connectFrom.value, node.id, sourceOutput.name)
+            store.log('info', `Connected: ${connectFrom.value}.${sourceOutput.name} → ${node.id}.${targetPort.name}`)
+            return
+          }
+        }
+        // If no type match, connect anyway with the port name
+        store.addEdge(connectFrom.value, node.id, connectFromPort.value)
+        store.log('info', `Connected: ${connectFrom.value} → ${node.id}`)
+        return
+      }
+    }
   }
 }
 
@@ -262,11 +298,12 @@ function onNodeDrag(id: string, dx: number, dy: number) {
   }
 }
 
-function onStartConnect(nodeId: string, e: MouseEvent) {
+function onStartConnect(nodeId: string, portName: string, e: MouseEvent) {
   connecting.value = true
   connectFrom.value = nodeId
+  connectFromPort.value = portName
   const node = store.nodeById(nodeId)!
-  connectMouse.x = node.x + 180
+  connectMouse.x = node.x + 220
   connectMouse.y = node.y + 40
 }
 
@@ -276,20 +313,20 @@ function edgePath(edge: GraphEdge): string {
   const to = store.nodeById(edge.to)
   if (!from || !to) return ''
 
-  const x1 = from.x + 180 // right side of node
-  const y1 = from.y + 40  // vertical center
+  const x1 = from.x + 220 // right side of node
+  const y1 = from.y + 50  // vertical center (approx)
   const x2 = to.x          // left side of node
-  const y2 = to.y + 40
-  const cpx = Math.abs(x2 - x1) * 0.5
+  const y2 = to.y + 50
+  const cpx = Math.max(Math.abs(x2 - x1) * 0.4, 50)
   return `M ${x1} ${y1} C ${x1 + cpx} ${y1}, ${x2 - cpx} ${y2}, ${x2} ${y2}`
 }
 
 const connectingPath = computed(() => {
   const from = store.nodeById(connectFrom.value)
   if (!from) return ''
-  const x1 = from.x + 180
-  const y1 = from.y + 40
-  const cpx = Math.abs(connectMouse.x - x1) * 0.5
+  const x1 = from.x + 220
+  const y1 = from.y + 50
+  const cpx = Math.max(Math.abs(connectMouse.x - x1) * 0.4, 50)
   return `M ${x1} ${y1} C ${x1 + cpx} ${y1}, ${connectMouse.x - cpx} ${connectMouse.y}, ${connectMouse.x} ${connectMouse.y}`
 })
 

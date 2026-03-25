@@ -1,0 +1,45 @@
+{
+  "name": "Basic txt2img",
+  "description": "Text to image — load checkpoint, encode prompt, sample, save",
+  "nodes": {
+    "checkpoint": {
+      "type": "load_checkpoint",
+      "widgets": { "checkpoint": "" },
+      "x": 50, "y": 150
+    },
+    "positive": {
+      "type": "clip_text_encode",
+      "widgets": { "text": "a professional photograph of a woman, natural lighting, 8k, detailed skin" },
+      "x": 320, "y": 50
+    },
+    "negative": {
+      "type": "clip_text_encode",
+      "widgets": { "text": "blurry, distorted, deformed, cartoon, low quality" },
+      "x": 320, "y": 260
+    },
+    "latent": {
+      "type": "empty_latent",
+      "widgets": { "width": 1024, "height": 1024, "batch_size": 1 },
+      "x": 320, "y": 430
+    },
+    "sampler": {
+      "type": "ksampler",
+      "widgets": { "seed": -1, "steps": 20, "cfg": 7.0, "sampler": "euler", "scheduler": "normal", "denoise": 1.0 },
+      "x": 620, "y": 150
+    },
+    "save": {
+      "type": "save_image",
+      "widgets": { "filename_prefix": "txt2img" },
+      "x": 900, "y": 200
+    }
+  },
+  "edges": [
+    { "from_node": "checkpoint", "from_port": "CLIP", "to_node": "positive", "to_port": "CLIP" },
+    { "from_node": "checkpoint", "from_port": "CLIP", "to_node": "negative", "to_port": "CLIP" },
+    { "from_node": "checkpoint", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
+    { "from_node": "positive", "from_port": "CONDITIONING", "to_node": "sampler", "to_port": "POSITIVE" },
+    { "from_node": "negative", "from_port": "CONDITIONING", "to_node": "sampler", "to_port": "NEGATIVE" },
+    { "from_node": "latent", "from_port": "LATENT", "to_node": "sampler", "to_port": "LATENT" },
+    { "from_node": "sampler", "from_port": "IMAGE", "to_node": "save", "to_port": "IMAGE" }
+  ]
+}

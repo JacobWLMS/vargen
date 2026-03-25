@@ -155,6 +155,57 @@ async def download_progress():
     return _engine.mm.downloads.get_all()
 
 
+# ── Workflows (graph format) ───────────────────────────────────
+
+WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
+WORKFLOWS_DIR.mkdir(exist_ok=True)
+
+
+@app.get("/api/workflows")
+async def list_workflows():
+    import json
+    workflows = []
+    for f in sorted(WORKFLOWS_DIR.glob("*.json")):
+        try:
+            data = json.loads(f.read_text())
+            workflows.append({
+                "id": f.stem,
+                "name": data.get("name", f.stem),
+                "description": data.get("description", ""),
+                "nodes": len(data.get("nodes", {})),
+                "edges": len(data.get("edges", [])),
+            })
+        except Exception:
+            workflows.append({"id": f.stem, "name": f.stem, "error": "parse error"})
+    return workflows
+
+
+@app.get("/api/workflows/{workflow_id}")
+async def get_workflow(workflow_id: str):
+    import json
+    path = WORKFLOWS_DIR / f"{workflow_id}.json"
+    if not path.exists():
+        raise HTTPException(404)
+    return json.loads(path.read_text())
+
+
+@app.put("/api/workflows/{workflow_id}")
+async def save_workflow(workflow_id: str, data: dict):
+    import json
+    path = WORKFLOWS_DIR / f"{workflow_id}.json"
+    path.write_text(json.dumps(data, indent=2))
+    return {"status": "saved", "id": workflow_id}
+
+
+@app.delete("/api/workflows/{workflow_id}")
+async def delete_workflow(workflow_id: str):
+    path = WORKFLOWS_DIR / f"{workflow_id}.json"
+    if not path.exists():
+        raise HTTPException(404)
+    path.unlink()
+    return {"status": "deleted"}
+
+
 # ── Node Types ─────────────────────────────────────────────────
 
 @app.get("/api/node-types")

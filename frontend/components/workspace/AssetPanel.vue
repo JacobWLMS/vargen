@@ -36,11 +36,11 @@
         </div>
       </Section>
 
-      <!-- Pipelines -->
-      <Section title="Pipelines" :count="pipelines.length">
-        <div v-for="p in pipelines" :key="p.id" @click="loadPipeline(p.id)" class="asset-item cursor-pointer">
-          <span class="flex-1 truncate">{{ p.name }}</span>
-          <span class="text-[9px] mono shrink-0" style="color: var(--text-muted)">{{ p.steps }}s</span>
+      <!-- Workflows -->
+      <Section title="Workflows" :count="workflows.length">
+        <div v-for="w in workflows" :key="w.id" @click="store.loadWorkflow(w.id)" class="asset-item cursor-pointer">
+          <span class="flex-1 truncate">{{ w.name }}</span>
+          <span class="text-[9px] mono shrink-0" style="color: var(--text-muted)">{{ w.nodes }}n</span>
         </div>
       </Section>
     </div>
@@ -51,7 +51,7 @@
 import { useWorkspaceStore } from '~/stores/workspace'
 const store = useWorkspaceStore()
 const search = ref('')
-const pipelines = ref<any[]>([])
+const workflows = ref<any[]>([])
 
 const filteredNodeTypes = computed(() => {
   const all = Object.values(store.nodeTypes) as any[]
@@ -74,18 +74,8 @@ function fmtColor(fmt: string) {
   return { safetensors: 'var(--success)', gguf: '#60a5fa', bin: 'var(--warning)' }[fmt] || 'var(--text-muted)'
 }
 
-async function loadPipeline(id: string) {
-  try {
-    const res = await fetch(`/api/pipelines/${id}`)
-    const data = await res.json()
-    store.fromYaml(data.yaml)
-    store.pipelineName = id
-    store.log('info', `Loaded pipeline: ${id}`)
-  } catch (e: any) { store.log('error', e.message) }
-}
-
 onMounted(async () => {
-  try { pipelines.value = await (await fetch('/api/pipelines')).json() } catch {}
+  try { workflows.value = await (await fetch('/api/workflows')).json() } catch {}
 })
 
 // Inline section component

@@ -6,7 +6,7 @@
   >
     <div
       class="pipeline-node"
-      :class="{ 'ring-1 ring-[var(--accent)]': selected }"
+      :class="{ 'selected': selected }"
       :style="{ background: bg, borderColor: borderCol }"
     >
       <!-- Type stripe -->
@@ -121,7 +121,7 @@
             class="w-3 h-3 rounded-full cursor-pointer"
             :style="{ background: portColor(port.type), border: '1.5px solid ' + portBorder(port.type) }"
             :title="port.name + ' (' + port.type + ')'"
-            @mousedown.left.stop="$emit('startConnect', $event)"
+            @mousedown.left.stop="$emit('startConnect', port.name, $event)"
           />
           <span class="absolute right-4 top-1/2 -translate-y-1/2 text-[8px] whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none" :style="{ color: portColor(port.type) }">{{ port.name }}</span>
         </div>
@@ -232,7 +232,10 @@ const borderCol = computed(() => COLORS[props.node.type]?.border || 'var(--borde
   position: relative;
 }
 .pipeline-node:hover {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.pipeline-node.selected {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 12px rgba(232, 138, 42, 0.2);
 }
 .pipeline-node input, .pipeline-node select, .pipeline-node textarea {
   font-size: 10px !important;

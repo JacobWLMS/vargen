@@ -133,7 +133,7 @@ const menus = [
     label: 'File',
     items: [
       { label: 'New Pipeline', shortcut: '', action: () => { store.nodes = []; store.edges = []; store.pipelineName = 'untitled' } },
-      { label: 'Save', shortcut: 'Ctrl+S', action: savePipeline },
+      { label: 'Save', shortcut: 'Ctrl+S', action: () => store.saveWorkflow() },
       { label: 'Load...', shortcut: '', action: openPicker },
     ],
   },
@@ -152,17 +152,6 @@ if (import.meta.client) {
   window.addEventListener('click', (e) => {
     if (!(e.target as HTMLElement).closest('.relative')) openMenu.value = ''
   })
-}
-
-async function savePipeline() {
-  const yaml = store.toYaml()
-  try {
-    await fetch(`/api/pipelines/${store.pipelineName}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ yaml }),
-    })
-  } catch {}
 }
 
 async function openPicker() {

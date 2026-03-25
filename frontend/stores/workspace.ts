@@ -128,6 +128,94 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.edges = this.edges.filter(e => e.id !== id)
     },
 
+    // ── Graph JSON (workflows) ─────────────────
+
+    toGraph(): any {
+      const graph: any = {
+        name: this.pipelineName,
+        description: this.pipelineDescription,
+        nodes: {} as Record<string, any>,
+        edges: [] as any[],
+      }
+      for (const node of this.nodes) {
+        graph.nodes[node.id] = {
+          type: node.type,
+          widgets: { ...node.params },
+          x: node.x,
+          y: node.y,
+        }
+      }
+      for (const edge of this.edges) {
+        graph.edges.push({
+          from_node: edge.from,
+          from_port: edge.param,
+          to_node: edge.to,
+          to_port: edge.param,
+        })
+      }
+      return graph
+    },
+
+    fromGraph(graph: any) {
+      this.nodes = []
+      this.edges = []
+      this.pipelineName = graph.name || 'untitled'
+      this.pipelineDescription = graph.description || ''
+
+      for (const [id, nodeDef] of Object.entries(graph.nodes || {})) {
+        const nd = nodeDef as any
+        const node: GraphNode = {
+          id,
+          name: id,
+          type: nd.type,
+          model: nd.widgets?.checkpoint || nd.widgets?.model || nd.widgets?.lora || '',
+          params: nd.widgets || {},
+          x: nd.x ?? 0,
+          y: nd.y ?? 0,
+        }
+        this.nodes.push(node)
+      }
+
+      for (const edge of (graph.edges || [])) {
+        this.edges.push({
+          id: `e_${edge.from_node}_${edge.to_node}_${edge.from_port}`,
+          from: edge.from_node,
+          to: edge.to_node,
+          param: edge.from_port,
+        })
+      }
+
+      this.selectedNodeId = this.nodes[0]?.id || null
+    },
+
+    async loadWorkflow(id: string) {
+      try {
+        const res = await fetch(`/api/workflows/${id}`)
+        if (res.ok) {
+          const graph = await res.json()
+          this.fromGraph(graph)
+          this.pipelineName = id
+          this.log('info', `Loaded workflow: ${graph.name || id}`)
+        }
+      } catch (e: any) {
+        this.log('error', `Failed to load workflow: ${e.message}`)
+      }
+    },
+
+    async saveWorkflow() {
+      const graph = this.toGraph()
+      try {
+        await fetch(`/api/workflows/${this.pipelineName}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(graph),
+        })
+        this.log('info', `Saved workflow: ${this.pipelineName}`)
+      } catch (e: any) {
+        this.log('error', `Save failed: ${e.message}`)
+      }
+    },
+
     // ── YAML ─────────────────────────────────
 
     toYaml(): string {
