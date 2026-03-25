@@ -116,7 +116,7 @@ register_node(NodeTypeDef(
     inputs=[],
     outputs=[PortDef("MODEL", "MODEL"), PortDef("CLIP", "CLIP"), PortDef("VAE", "VAE")],
     widgets=[WidgetDef("checkpoint", "combo", label="Checkpoint", options=[])],
-    execute=exec_load_checkpoint, color="#7c3aed",
+    execute=exec_load_checkpoint, color="#a855f7",
     description="Load a Stable Diffusion / SDXL checkpoint",
 ))
 
@@ -128,18 +128,18 @@ register_node(NodeTypeDef(
         WidgetDef("lora", "combo", label="LoRA", options=[]),
         WidgetDef("strength", "slider", default=0.7, min=0, max=2, step=0.05, label="Strength"),
     ],
-    execute=exec_load_lora, color="#7c3aed",
+    execute=exec_load_lora, color="#c084fc",
 ))
 
 register_node(NodeTypeDef(
     type_id="load_image", category="loaders", label="Load Image",
     inputs=[], outputs=[PortDef("IMAGE", "IMAGE")], widgets=[],
-    execute=exec_load_image, color="#60a0ff",
+    execute=exec_load_image, color="#38bdf8",
 ))
 
 register_node(NodeTypeDef(
     type_id="load_upscale_model", category="loaders", label="Load Upscale Model",
     inputs=[], outputs=[PortDef("UPSCALE_MODEL", "UPSCALE_MODEL")],
     widgets=[WidgetDef("model", "combo", label="Model", options=[])],
-    execute=exec_load_upscale_model, color="#60a0ff",
+    execute=exec_load_upscale_model, color="#2dd4bf",
 ))

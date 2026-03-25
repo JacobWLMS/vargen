@@ -90,7 +90,7 @@ register_node(NodeTypeDef(
         WidgetDef("height", "number", default=1024, min=64, max=4096, step=64, label="Height"),
         WidgetDef("batch_size", "number", default=1, min=1, max=64, step=1, label="Batch"),
     ],
-    execute=exec_empty_latent, color="#ff80c0",
+    execute=exec_empty_latent, color="#f472b6",
     description="Create an empty latent image (random noise)",
 ))
 
@@ -99,7 +99,7 @@ register_node(NodeTypeDef(
     inputs=[PortDef("VAE", "VAE"), PortDef("LATENT", "LATENT")],
     outputs=[PortDef("IMAGE", "IMAGE")],
     widgets=[],
-    execute=exec_vae_decode, color="#ff6060",
+    execute=exec_vae_decode, color="#f87171",
     description="Decode latent to image using VAE",
 ))
 
@@ -108,6 +108,6 @@ register_node(NodeTypeDef(
     inputs=[PortDef("VAE", "VAE"), PortDef("IMAGE", "IMAGE")],
     outputs=[PortDef("LATENT", "LATENT")],
     widgets=[],
-    execute=exec_vae_encode, color="#ff6060",
+    execute=exec_vae_encode, color="#f87171",
     description="Encode image to latent using VAE",
 ))

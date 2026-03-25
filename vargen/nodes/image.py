@@ -103,7 +103,7 @@ register_node(NodeTypeDef(
     inputs=[PortDef("IMAGE", "IMAGE")],
     outputs=[PortDef("IMAGE", "IMAGE")],
     widgets=[WidgetDef("filename_prefix", "text", default="vargen", label="Prefix")],
-    execute=exec_save_image, color="#22c55e",
+    execute=exec_save_image, color="#4ade80",
     description="Save image to outputs directory",
 ))
 
@@ -112,7 +112,7 @@ register_node(NodeTypeDef(
     inputs=[PortDef("IMAGE", "IMAGE")],
     outputs=[PortDef("IMAGE", "IMAGE")],
     widgets=[],
-    execute=exec_preview_image, color="#22c55e",
+    execute=exec_preview_image, color="#4ade80",
     description="Preview image (no save)",
 ))
 
@@ -135,7 +135,7 @@ register_node(NodeTypeDef(
         WidgetDef("height", "number", default=1024, min=64, max=8192, step=64, label="Height"),
         WidgetDef("scale_by", "slider", default=0, min=0, max=8, step=0.25, label="Scale By (0=use w/h)"),
     ],
-    execute=exec_image_scale, color="#22c55e",
+    execute=exec_image_scale, color="#4ade80",
     description="Resize image with various interpolation methods",
 ))
 
@@ -144,7 +144,7 @@ register_node(NodeTypeDef(
     inputs=[PortDef("IMAGE", "IMAGE")],
     outputs=[PortDef("IMAGE", "IMAGE")],
     widgets=[],
-    execute=exec_image_invert, color="#22c55e",
+    execute=exec_image_invert, color="#4ade80",
 ))
 
 register_node(NodeTypeDef(
@@ -152,7 +152,7 @@ register_node(NodeTypeDef(
     inputs=[PortDef("IMAGE", "IMAGE")],
     outputs=[PortDef("IMAGE", "IMAGE")],
     widgets=[WidgetDef("radius", "slider", default=3, min=1, max=50, step=1, label="Radius")],
-    execute=exec_image_blur, color="#22c55e",
+    execute=exec_image_blur, color="#4ade80",
 ))
 
 register_node(NodeTypeDef(
@@ -165,5 +165,5 @@ register_node(NodeTypeDef(
         WidgetDef("width", "number", default=512, min=1, max=8192, step=1, label="Width"),
         WidgetDef("height", "number", default=512, min=1, max=8192, step=1, label="Height"),
     ],
-    execute=exec_image_crop, color="#22c55e",
+    execute=exec_image_crop, color="#4ade80",
 ))

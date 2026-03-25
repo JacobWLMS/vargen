@@ -162,24 +162,22 @@ const PORT_COLORS: Record<string, string> = {
 }
 function portColor(t: string) { return PORT_COLORS[t] || '#666' }
 
-const C: Record<string, [string, string, string]> = {
-  load_checkpoint: ['#b380ff', 'rgba(60,30,80,0.7)', 'rgba(179,128,255,0.25)'],
-  load_lora: ['#b380ff', 'rgba(60,30,80,0.7)', 'rgba(179,128,255,0.25)'],
-  load_image: ['#60a0ff', 'rgba(15,30,60,0.7)', 'rgba(96,160,255,0.25)'],
-  empty_latent: ['#ff80c0', 'rgba(60,20,40,0.7)', 'rgba(255,128,192,0.25)'],
-  load_upscale_model: ['#60a0ff', 'rgba(15,30,60,0.7)', 'rgba(96,160,255,0.25)'],
-  clip_text_encode: ['#ffd500', 'rgba(60,50,10,0.7)', 'rgba(255,213,0,0.25)'],
-  clip_set_last_layer: ['#ffd500', 'rgba(60,50,10,0.7)', 'rgba(255,213,0,0.25)'],
-  conditioning_combine: ['#ffa040', 'rgba(60,35,10,0.7)', 'rgba(255,160,64,0.25)'],
-  ksampler: ['#e88a2a', 'rgba(60,35,10,0.7)', 'rgba(232,138,42,0.25)'],
-  save_image: ['#22c55e', 'rgba(10,40,20,0.7)', 'rgba(34,197,94,0.25)'],
-  preview_image: ['#22c55e', 'rgba(10,40,20,0.7)', 'rgba(34,197,94,0.25)'],
-  upscale_with_model: ['#60a0ff', 'rgba(15,30,60,0.7)', 'rgba(96,160,255,0.25)'],
-  image_scale: ['#60a0ff', 'rgba(15,30,60,0.7)', 'rgba(96,160,255,0.25)'],
+// Auto-generate bg/border from the node type's accent color (from API)
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '')
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
 }
-const dotColor = computed(() => C[props.node.type]?.[0] || nodeDef.value?.color || '#666')
-const bg = computed(() => C[props.node.type]?.[1] || 'var(--bg-panel)')
-const borderCol = computed(() => C[props.node.type]?.[2] || 'var(--border)')
+
+const accentColor = computed(() => nodeDef.value?.color || '#666666')
+const dotColor = accentColor
+const bg = computed(() => {
+  const [r, g, b] = hexToRgb(accentColor.value)
+  return `rgba(${Math.round(r * 0.2)}, ${Math.round(g * 0.2)}, ${Math.round(b * 0.2)}, 0.7)`
+})
+const borderCol = computed(() => {
+  const [r, g, b] = hexToRgb(accentColor.value)
+  return `rgba(${r}, ${g}, ${b}, 0.25)`
+})
 </script>
 
 <style>

@@ -84,7 +84,7 @@ register_node(NodeTypeDef(
     inputs=[PortDef("CLIP", "CLIP")],
     outputs=[PortDef("CONDITIONING", "CONDITIONING")],
     widgets=[WidgetDef("text", "textarea", default="", label="Text")],
-    execute=exec_clip_text_encode, color="#ffd500",
+    execute=exec_clip_text_encode, color="#facc15",
     description="Encode text using CLIP text encoder",
 ))
 
@@ -93,5 +93,5 @@ register_node(NodeTypeDef(
     inputs=[PortDef("CONDITIONING_1", "CONDITIONING"), PortDef("CONDITIONING_2", "CONDITIONING")],
     outputs=[PortDef("CONDITIONING", "CONDITIONING")],
     widgets=[],
-    execute=exec_conditioning_combine, color="#ffa040",
+    execute=exec_conditioning_combine, color="#fb923c",
 ))
