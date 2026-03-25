@@ -16,18 +16,25 @@ def exec_clip_text_encode(inputs, widgets, ctx):
     text = widgets.get("text", "")
     log.info(f"Encoding text: {text[:80]}...")
 
+    # Determine device
+    device = "cpu"
+    if hasattr(pipe, '_execution_device'):
+        device = pipe._execution_device
+    elif hasattr(pipe, 'device'):
+        device = pipe.device
+
     # Use the pipeline's text encoder
     if hasattr(pipe, 'encode_prompt'):
-        # SDXL
+        # SDXL — use encode_prompt which handles device internally
         prompt_embeds, negative_prompt_embeds, pooled, neg_pooled = pipe.encode_prompt(
-            prompt=text, device=pipe.device, num_images_per_prompt=1, do_classifier_free_guidance=False
+            prompt=text, device=device, num_images_per_prompt=1, do_classifier_free_guidance=False
         )
         return {"CONDITIONING": {"embeds": prompt_embeds, "pooled": pooled, "text": text}}
     else:
         # SD1.5
         text_inputs = pipe.tokenizer(text, padding="max_length", max_length=77,
                                       truncation=True, return_tensors="pt")
-        text_embeds = pipe.text_encoder(text_inputs.input_ids.to(pipe.device))[0]
+        text_embeds = pipe.text_encoder(text_inputs.input_ids.to(device))[0]
         return {"CONDITIONING": {"embeds": text_embeds, "text": text}}
 
 
