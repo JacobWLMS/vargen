@@ -170,13 +170,10 @@ function hexToRgb(hex: string): [number, number, number] {
 
 const accentColor = computed(() => nodeDef.value?.color || '#666666')
 const dotColor = accentColor
-const bg = computed(() => {
-  const [r, g, b] = hexToRgb(accentColor.value)
-  return `rgba(${Math.round(r * 0.2)}, ${Math.round(g * 0.2)}, ${Math.round(b * 0.2)}, 0.7)`
-})
+const bg = computed(() => '#0f0f0f')
 const borderCol = computed(() => {
   const [r, g, b] = hexToRgb(accentColor.value)
-  return `rgba(${r}, ${g}, ${b}, 0.25)`
+  return `rgba(${r}, ${g}, ${b}, 0.2)`
 })
 </script>
 
