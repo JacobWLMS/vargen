@@ -27,38 +27,34 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #333; }
+::-webkit-scrollbar-thumb { background: #1a1a1a; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #2a2a2a; }
 
-/* Monospace for data */
 .mono { font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace; }
 
-/* Panel styles */
 .panel {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 3px;
 }
 
 .panel-header {
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
-/* Input styles */
 input, select, textarea {
   background: var(--bg-secondary) !important;
   border: 1px solid var(--border) !important;
   color: var(--text-primary) !important;
-  border-radius: 4px;
+  border-radius: 3px;
   font-size: 13px;
   outline: none;
 }
@@ -66,11 +62,10 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent) !important;
 }
 
-/* Button base */
 .btn {
-  padding: 6px 12px;
-  border-radius: 4px;
-  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.1s;
@@ -81,9 +76,14 @@ input:focus, select:focus, textarea:focus {
   color: #000;
 }
 .btn-primary:hover { background: #f09530; }
-.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-primary:disabled { opacity: 0.3; cursor: not-allowed; }
 .btn-ghost {
   background: transparent;
   color: var(--text-secondary);
 }
 .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-danger {
+  background: transparent;
+  color: var(--error);
+}
+.btn-danger:hover { background: rgba(248, 81, 73, 0.1); }

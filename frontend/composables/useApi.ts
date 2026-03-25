@@ -1,18 +1,15 @@
 /**
- * API client composable — talks to the vargen FastAPI backend.
+ * API client — uses relative URLs so it works from any machine on the network.
  */
 export function useApi() {
-  const config = useRuntimeConfig()
-  const base = config.public.apiBase
-
   async function fetchJson(path: string, options?: RequestInit) {
-    const res = await fetch(`${base}${path}`, {
+    const res = await fetch(path, {
       headers: { 'Content-Type': 'application/json', ...options?.headers },
       ...options,
     })
     if (!res.ok) {
       const text = await res.text()
-      throw new Error(`API ${res.status}: ${text}`)
+      throw new Error(`${res.status}: ${text}`)
     }
     return res.json()
   }
@@ -32,13 +29,13 @@ export function useApi() {
 
   // Outputs
   const listOutputs = (limit = 50) => fetchJson(`/api/outputs?limit=${limit}`)
-  const outputUrl = (filename: string) => `${base}/api/outputs/${filename}`
+  const outputUrl = (filename: string) => `/api/outputs/${filename}`
 
   // Upload
   async function uploadImage(file: File): Promise<{ filename: string; url: string }> {
     const form = new FormData()
     form.append('file', file)
-    const res = await fetch(`${base}/api/upload`, { method: 'POST', body: form })
+    const res = await fetch('/api/upload', { method: 'POST', body: form })
     if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
     return res.json()
   }
@@ -47,11 +44,7 @@ export function useApi() {
   async function runPipeline(pipelineId: string, imageFilename?: string, overrides?: Record<string, any>) {
     return fetchJson('/api/run', {
       method: 'POST',
-      body: JSON.stringify({
-        pipeline_id: pipelineId,
-        image_filename: imageFilename,
-        overrides,
-      }),
+      body: JSON.stringify({ pipeline_id: pipelineId, image_filename: imageFilename, overrides }),
     })
   }
 
@@ -68,37 +61,21 @@ export function useApi() {
       onError?: (msg: string) => void
     },
   ) {
-    const wsBase = base.replace('http', 'ws')
-    const ws = new WebSocket(`${wsBase}/api/ws/run`)
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${proto}://${location.host}/api/ws/run`)
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({
-        pipeline_id: pipelineId,
-        image_filename: imageFilename,
-        overrides,
-      }))
+      ws.send(JSON.stringify({ pipeline_id: pipelineId, image_filename: imageFilename, overrides }))
     }
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
       switch (data.event) {
-        case 'step_start':
-          callbacks?.onStepStart?.(data)
-          break
-        case 'step_done':
-          callbacks?.onStepDone?.(data)
-          break
-        case 'batch_progress':
-          callbacks?.onBatchProgress?.(data)
-          break
-        case 'complete':
-          callbacks?.onComplete?.()
-          ws.close()
-          break
-        case 'error':
-          callbacks?.onError?.(data.message)
-          ws.close()
-          break
+        case 'step_start': callbacks?.onStepStart?.(data); break
+        case 'step_done': callbacks?.onStepDone?.(data); break
+        case 'batch_progress': callbacks?.onBatchProgress?.(data); break
+        case 'complete': callbacks?.onComplete?.(); ws.close(); break
+        case 'error': callbacks?.onError?.(data.message); ws.close(); break
       }
     }
 
@@ -106,22 +83,13 @@ export function useApi() {
     return ws
   }
 
-  // Step types
   const listStepTypes = () => fetchJson('/api/step-types')
 
   return {
-    base,
-    listPipelines,
-    getPipeline,
-    savePipeline,
-    deletePipeline,
-    getModelStatus,
-    checkModels,
-    listOutputs,
-    outputUrl,
-    uploadImage,
-    runPipeline,
-    runPipelineWs,
+    listPipelines, getPipeline, savePipeline, deletePipeline,
+    getModelStatus, checkModels,
+    listOutputs, outputUrl,
+    uploadImage, runPipeline, runPipelineWs,
     listStepTypes,
   }
 }

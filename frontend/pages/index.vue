@@ -71,7 +71,8 @@
       <template v-if="outputImages.length">
         <img
           :src="outputImages[selectedOutput]"
-          class="max-h-[calc(100vh-12rem)] rounded shadow-2xl"
+          class="max-h-[calc(100vh-12rem)] rounded"
+          style="border: 1px solid var(--border)"
         />
         <div v-if="outputImages.length > 1" class="flex gap-1.5 mt-3 flex-wrap justify-center">
           <img
