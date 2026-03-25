@@ -18,8 +18,8 @@
 
     <!-- Transform surface -->
     <div :style="surfaceStyle">
-      <!-- Edges (SVG) -->
-      <svg class="absolute top-0 left-0 pointer-events-none" style="overflow: visible; width: 1px; height: 1px">
+      <!-- Edges (SVG) — re-renders on node move via edgeRenderKey -->
+      <svg class="absolute top-0 left-0 pointer-events-none" style="overflow: visible; width: 1px; height: 1px" :data-render="edgeRenderKey">
         <path
           v-for="edge in store.edges"
           :key="edge.id"
@@ -307,32 +307,35 @@ function onStartConnect(nodeId: string, portName: string, e: MouseEvent) {
   connectMouse.y = node.y + 40
 }
 
-// Port position calculation
-function getOutputPortPos(nodeId: string, portName: string): { x: number; y: number } {
+// Get port position by querying actual DOM element
+function getPortPos(nodeId: string, portName: string, dir: 'in' | 'out'): { x: number; y: number } {
+  const dot = viewport.value?.querySelector(
+    `[data-node-id="${nodeId}"][data-port-name="${portName}"][data-port-dir="${dir}"]`
+  ) as HTMLElement | null
+
+  if (dot) {
+    // Get position relative to the canvas surface (accounting for pan/zoom)
+    const dotRect = dot.getBoundingClientRect()
+    const vpRect = viewport.value!.getBoundingClientRect()
+    return {
+      x: (dotRect.left + dotRect.width / 2 - vpRect.left - store.pan.x) / store.zoom,
+      y: (dotRect.top + dotRect.height / 2 - vpRect.top - store.pan.y) / store.zoom,
+    }
+  }
+
+  // Fallback: estimate from node position
   const node = store.nodeById(nodeId)
   if (!node) return { x: 0, y: 0 }
-  const def = store.nodeTypes[node.type]
-  const outputs = def?.outputs || []
-  const portIndex = outputs.findIndex((p: any) => p.name === portName)
-  const idx = portIndex >= 0 ? portIndex : 0
-  // Ports start ~40px from top, spaced 20px apart
-  return { x: node.x + 225, y: node.y + 42 + idx * 20 }
+  return dir === 'out'
+    ? { x: node.x + 220, y: node.y + 50 }
+    : { x: node.x, y: node.y + 50 }
 }
 
-function getInputPortPos(nodeId: string, portName: string): { x: number; y: number } {
-  const node = store.nodeById(nodeId)
-  if (!node) return { x: 0, y: 0 }
-  const def = store.nodeTypes[node.type]
-  const inputs = def?.inputs || []
-  const portIndex = inputs.findIndex((p: any) => p.name === portName)
-  const idx = portIndex >= 0 ? portIndex : 0
-  return { x: node.x - 5, y: node.y + 42 + idx * 20 }
-}
-
-// Edge rendering
+// Edge rendering — uses real DOM positions
 function edgePath(edge: GraphEdge): string {
-  const from = getOutputPortPos(edge.from, edge.param)
-  // Find the matching input port by type
+  const from = getPortPos(edge.from, edge.param, 'out')
+
+  // Find matching input port
   const sourceNode = store.nodeById(edge.from)
   const targetNode = store.nodeById(edge.to)
   if (!sourceNode || !targetNode) return ''
@@ -341,19 +344,25 @@ function edgePath(edge: GraphEdge): string {
   const targetDef = store.nodeTypes[targetNode.type]
   const sourcePort = sourceDef?.outputs?.find((p: any) => p.name === edge.param)
   const targetPort = targetDef?.inputs?.find((p: any) => p.type === sourcePort?.type)
+  const targetPortName = targetPort?.name || targetDef?.inputs?.[0]?.name || edge.param
 
-  const to = targetPort
-    ? getInputPortPos(edge.to, targetPort.name)
-    : { x: targetNode.x - 5, y: targetNode.y + 42 }
+  const to = getPortPos(edge.to, targetPortName, 'in')
 
-  const cpx = Math.max(Math.abs(to.x - from.x) * 0.4, 60)
+  const cpx = Math.max(Math.abs(to.x - from.x) * 0.35, 50)
   return `M ${from.x} ${from.y} C ${from.x + cpx} ${from.y}, ${to.x - cpx} ${to.y}, ${to.x} ${to.y}`
 }
 
 const connectingPath = computed(() => {
-  const from = getOutputPortPos(connectFrom.value, connectFromPort.value)
-  const cpx = Math.max(Math.abs(connectMouse.x - from.x) * 0.4, 60)
+  const from = getPortPos(connectFrom.value, connectFromPort.value, 'out')
+  const cpx = Math.max(Math.abs(connectMouse.x - from.x) * 0.35, 50)
   return `M ${from.x} ${from.y} C ${from.x + cpx} ${from.y}, ${connectMouse.x - cpx} ${connectMouse.y}, ${connectMouse.x} ${connectMouse.y}`
+})
+
+// Force edge re-render on node move by tracking a counter
+const edgeRenderKey = ref(0)
+watch(() => store.nodes.map(n => `${n.x}:${n.y}`).join(','), () => {
+  // Debounce: update on next frame so DOM has moved
+  requestAnimationFrame(() => edgeRenderKey.value++)
 })
 
 function edgeColor(edge: GraphEdge): string {
