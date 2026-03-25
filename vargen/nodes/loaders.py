@@ -46,8 +46,13 @@ def exec_load_checkpoint(inputs, widgets, ctx):
         torch_dtype = DTYPE_MAP.get(dtype_setting, torch.float16)
 
     if is_flux or is_gguf:
-        pipe = _load_flux_checkpoint(model_path, is_gguf, torch_dtype)
-        arch = "flux"
+        try:
+            pipe = _load_flux_checkpoint(model_path, is_gguf, torch_dtype)
+            arch = "flux"
+        except Exception as e:
+            log.warning(f"FLUX load failed: {e}. Trying as SD checkpoint...")
+            pipe = _load_sd_checkpoint(model_path, torch_dtype)
+            arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
     else:
         pipe = _load_sd_checkpoint(model_path, torch_dtype)
         arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
@@ -58,9 +63,13 @@ def exec_load_checkpoint(inputs, widgets, ctx):
         pipe.enable_attention_slicing()
         log.info("Attention slicing: enabled")
 
-    if vae_tiling and hasattr(pipe, 'enable_vae_tiling'):
-        pipe.enable_vae_tiling()
-        log.info("VAE tiling: enabled")
+    if vae_tiling:
+        if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'enable_tiling'):
+            pipe.vae.enable_tiling()
+            log.info("VAE tiling: enabled")
+        elif hasattr(pipe, 'enable_vae_tiling'):
+            pipe.enable_vae_tiling()
+            log.info("VAE tiling: enabled (legacy)")
 
     log.info(f"Loaded {arch}: {ckpt_name} (dtype={dtype_setting}, offload={offload_mode})")
 
@@ -110,13 +119,24 @@ def _load_sd_checkpoint(model_path, torch_dtype):
     kwargs = {"torch_dtype": torch_dtype, "trust_remote_code": True}
 
     if model_path.is_file():
+        errors = []
+        # Try SDXL
         try:
+            log.info("Trying SDXL pipeline...")
             return StableDiffusionXLPipeline.from_single_file(str(model_path), **kwargs)
-        except Exception:
-            try:
-                return StableDiffusionPipeline.from_single_file(str(model_path), **kwargs)
-            except Exception as e:
-                raise ValueError(f"Failed to load as SD1.5 or SDXL: {e}")
+        except Exception as e:
+            errors.append(f"SDXL: {e}")
+            log.info(f"Not SDXL: {e}")
+
+        # Try SD1.5
+        try:
+            log.info("Trying SD1.5 pipeline...")
+            return StableDiffusionPipeline.from_single_file(str(model_path), **kwargs)
+        except Exception as e:
+            errors.append(f"SD1.5: {e}")
+            log.info(f"Not SD1.5: {e}")
+
+        raise ValueError(f"Failed to load checkpoint. Tried:\n" + "\n".join(errors))
     else:
         return AutoPipelineForText2Image.from_pretrained(str(model_path), **kwargs)
 
@@ -139,18 +159,26 @@ def _setup_vram_offload(pipe, mode="auto"):
         else:
             mode = "gpu_only"
 
-    if mode == "sequential_cpu":
-        log.info("Offload: sequential CPU (layer-by-layer, slowest, lowest VRAM)")
-        pipe.enable_sequential_cpu_offload()
-    elif mode == "model_cpu":
-        log.info("Offload: model CPU (whole model swap)")
-        pipe.enable_model_cpu_offload()
-    elif mode == "gpu_only":
-        log.info("Offload: none (keeping on GPU)")
-        pipe.to("cuda")
-    elif mode == "cpu_only":
-        log.info("Offload: CPU only (no GPU)")
-        pipe.to("cpu")
+    try:
+        if mode == "sequential_cpu":
+            log.info("Offload: sequential CPU (layer-by-layer, slowest, lowest VRAM)")
+            pipe.enable_sequential_cpu_offload()
+        elif mode == "model_cpu":
+            log.info("Offload: model CPU (whole model swap)")
+            pipe.enable_model_cpu_offload()
+        elif mode == "gpu_only":
+            log.info("Offload: none (keeping on GPU)")
+            pipe.to("cuda")
+        elif mode == "cpu_only":
+            log.info("Offload: CPU only (no GPU)")
+            pipe.to("cpu")
+    except Exception as e:
+        log.warning(f"Offload mode '{mode}' failed: {e}. Trying model_cpu_offload...")
+        try:
+            pipe.enable_model_cpu_offload()
+        except Exception as e2:
+            log.warning(f"model_cpu_offload also failed: {e2}. Keeping on CPU.")
+            pipe.to("cpu")
 
 
 def exec_load_lora(inputs, widgets, ctx):

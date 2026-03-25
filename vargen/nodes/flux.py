@@ -26,6 +26,15 @@ def exec_flux_sampler(inputs, widgets, ctx):
     if not pipe:
         raise ValueError("FLUX Sampler needs a pipeline — connect MODEL from Load Checkpoint (select a FLUX model)")
 
+    # Verify it's actually a FLUX pipeline
+    from diffusers import FluxPipeline
+    if not isinstance(pipe, FluxPipeline):
+        pipe_type = type(pipe).__name__
+        raise ValueError(
+            f"FLUX Sampler got a {pipe_type} pipeline, not FLUX. "
+            f"Either select a FLUX model in Load Checkpoint, or use KSampler for SDXL/SD1.5 models."
+        )
+
     prompt = widgets.get("prompt", "")
     positive = inputs.get("POSITIVE")
     if positive and positive.get("text"):
