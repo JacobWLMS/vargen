@@ -16,7 +16,7 @@ DTYPE_MAP = {
     "fp32": torch.float32,
 }
 
-OFFLOAD_MODES = ["auto", "sequential_cpu", "model_cpu", "gpu_only", "cpu_only"]
+OFFLOAD_MODES = ["auto", "model_cpu", "group_offload", "sequential_cpu", "gpu_only", "cpu_only"]
 
 
 def exec_load_checkpoint(inputs, widgets, ctx):
@@ -142,6 +142,16 @@ def _load_sd_checkpoint(model_path, torch_dtype):
 
 
 def _setup_vram_offload(pipe, mode="auto"):
+    """Set up VRAM offloading using diffusers' built-in hooks.
+
+    Modes:
+    - auto: pick best mode based on free VRAM
+    - model_cpu: move whole models between CPU/GPU (recommended default)
+    - group_offload: move layer groups with CUDA streams (fast + low VRAM)
+    - sequential_cpu: move individual layers (slowest, lowest VRAM)
+    - gpu_only: keep everything on GPU (needs lots of VRAM)
+    - cpu_only: no GPU at all
+    """
     if not torch.cuda.is_available():
         log.info("No CUDA: running on CPU")
         pipe.to("cpu")
@@ -152,33 +162,61 @@ def _setup_vram_offload(pipe, mode="auto"):
     log.info(f"VRAM: {free_mb}MB free / {total_mb}MB total")
 
     if mode == "auto":
-        if free_mb < 4000:
-            mode = "sequential_cpu"
-        elif free_mb < 8000:
+        if free_mb < 6000:
+            mode = "group_offload"
+        elif free_mb < 10000:
             mode = "model_cpu"
         else:
             mode = "gpu_only"
 
-    try:
-        if mode == "sequential_cpu":
-            log.info("Offload: sequential CPU (layer-by-layer, slowest, lowest VRAM)")
-            pipe.enable_sequential_cpu_offload()
-        elif mode == "model_cpu":
-            log.info("Offload: model CPU (whole model swap)")
-            pipe.enable_model_cpu_offload()
-        elif mode == "gpu_only":
-            log.info("Offload: none (keeping on GPU)")
-            pipe.to("cuda")
-        elif mode == "cpu_only":
-            log.info("Offload: CPU only (no GPU)")
-            pipe.to("cpu")
-    except Exception as e:
-        log.warning(f"Offload mode '{mode}' failed: {e}. Trying model_cpu_offload...")
+    methods = {
+        "group_offload": _try_group_offload,
+        "sequential_cpu": lambda p: p.enable_sequential_cpu_offload(),
+        "model_cpu": lambda p: p.enable_model_cpu_offload(),
+        "gpu_only": lambda p: p.to("cuda"),
+        "cpu_only": lambda p: p.to("cpu"),
+    }
+
+    # Try requested mode, fall back through chain
+    fallback_order = [mode, "group_offload", "model_cpu", "sequential_cpu", "cpu_only"]
+    seen = set()
+    for m in fallback_order:
+        if m in seen or m not in methods:
+            continue
+        seen.add(m)
         try:
-            pipe.enable_model_cpu_offload()
-        except Exception as e2:
-            log.warning(f"model_cpu_offload also failed: {e2}. Keeping on CPU.")
-            pipe.to("cpu")
+            methods[m](pipe)
+            log.info(f"Offload: {m}")
+            return
+        except Exception as e:
+            log.warning(f"Offload '{m}' failed: {e}")
+
+    log.warning("All offload methods failed. Running on CPU.")
+    pipe.to("cpu")
+
+
+def _try_group_offload(pipe):
+    """Use group offloading with CUDA streams — fast + low VRAM."""
+    try:
+        from diffusers.hooks import apply_group_offloading
+        # Apply to each model component individually
+        for attr_name in ["transformer", "unet", "text_encoder", "text_encoder_2", "vae"]:
+            component = getattr(pipe, attr_name, None)
+            if component is not None and hasattr(component, 'parameters'):
+                try:
+                    apply_group_offloading(
+                        component,
+                        offload_type="leaf_level",
+                        offload_device=torch.device("cpu"),
+                        onload_device=torch.device("cuda"),
+                        use_stream=True,
+                    )
+                except Exception:
+                    # Some components don't support group offloading
+                    pass
+        log.info("Group offloading with CUDA streams enabled")
+    except ImportError:
+        raise RuntimeError("Group offloading requires diffusers >= 0.32.0")
 
 
 def exec_load_lora(inputs, widgets, ctx):
