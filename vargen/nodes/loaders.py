@@ -57,6 +57,11 @@ def exec_load_checkpoint(inputs, widgets, ctx):
         pipe = _load_sd_checkpoint(model_path, torch_dtype)
         arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
 
+    # GGUF models need sequential offload — they're too large for model_cpu_offload
+    if is_gguf and offload_mode == "auto":
+        offload_mode = "sequential_cpu"
+        log.info("GGUF model: forcing sequential CPU offload")
+
     _setup_vram_offload(pipe, offload_mode)
 
     if attn_slicing and hasattr(pipe, "enable_attention_slicing"):

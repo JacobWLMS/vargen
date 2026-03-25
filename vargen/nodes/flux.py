@@ -65,8 +65,14 @@ def exec_flux_sampler(inputs, widgets, ctx):
                 num_inference_steps=steps, guidance_scale=guidance,
                 generator=generator, max_sequence_length=max_seq_len,
             )
+        except torch.cuda.OutOfMemoryError:
+            raise  # Let executor handle OOM
         except Exception as e:
             log.warning(f"FluxImg2ImgPipeline failed: {e}. Falling back to txt2img.")
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             result = pipe(
                 prompt=prompt, width=width, height=height,
                 num_inference_steps=steps, guidance_scale=guidance,
