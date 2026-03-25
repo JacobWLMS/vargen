@@ -27,7 +27,7 @@ def exec_load_checkpoint(inputs, widgets, ctx):
 
     # FLUX models (including GGUF)
     if is_flux or is_gguf:
-        pipe = _load_flux_checkpoint(model_path, is_gguf)
+        pipe = _load_flux_checkpoint(model_path, is_gguf, ctx.get("model_manager"))
         arch = "flux"
     else:
         pipe = _load_sd_checkpoint(model_path)
@@ -53,7 +53,7 @@ def exec_load_checkpoint(inputs, widgets, ctx):
     }
 
 
-def _load_flux_checkpoint(model_path, is_gguf):
+def _load_flux_checkpoint(model_path, is_gguf, model_manager=None):
     """Load FLUX model — handles GGUF, safetensors, and HF repo."""
     from diffusers import FluxPipeline
 
@@ -70,6 +70,8 @@ def _load_flux_checkpoint(model_path, is_gguf):
         transformer = FluxTransformer2DModel.from_single_file(
             str(model_path), quantization_config=gguf_config, torch_dtype=torch.bfloat16,
         )
+
+        log.info("Loading FLUX pipeline components (cached after first download)...")
         pipe = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev", transformer=transformer, torch_dtype=torch.bfloat16,
         )

@@ -1,0 +1,31 @@
+{
+  "name": "FLUX img2img",
+  "description": "FLUX image-to-image — load reference image, generate variation with denoise control",
+  "nodes": {
+    "checkpoint": {
+      "type": "load_checkpoint",
+      "widgets": { "checkpoint": "" },
+      "x": 50, "y": 150
+    },
+    "load_img": {
+      "type": "load_image",
+      "widgets": {},
+      "x": 50, "y": 380
+    },
+    "sampler": {
+      "type": "flux_sampler",
+      "widgets": { "prompt": "a professional photograph, detailed, high quality", "seed": -1, "steps": 20, "guidance": 3.5, "denoise": 0.65, "width": 1024, "height": 1024, "max_sequence_length": 512 },
+      "x": 400, "y": 150
+    },
+    "save": {
+      "type": "save_image",
+      "widgets": { "filename_prefix": "flux_img2img" },
+      "x": 730, "y": 200
+    }
+  },
+  "edges": [
+    { "from_node": "checkpoint", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
+    { "from_node": "load_img", "from_port": "IMAGE", "to_node": "sampler", "to_port": "IMAGE" },
+    { "from_node": "sampler", "from_port": "IMAGE", "to_node": "save", "to_port": "IMAGE" }
+  ]
+}

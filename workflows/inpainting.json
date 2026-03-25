@@ -1,0 +1,51 @@
+{
+  "name": "Inpainting",
+  "description": "Mask-based inpainting — load image, create mask, inpaint masked region",
+  "nodes": {
+    "checkpoint": {
+      "type": "load_checkpoint",
+      "widgets": { "checkpoint": "" },
+      "x": 50, "y": 150
+    },
+    "load_img": {
+      "type": "load_image",
+      "widgets": {},
+      "x": 50, "y": 380
+    },
+    "mask": {
+      "type": "solid_mask",
+      "widgets": { "width": 1024, "height": 1024, "value": 1.0 },
+      "x": 50, "y": 550
+    },
+    "positive": {
+      "type": "clip_text_encode",
+      "widgets": { "text": "beautiful, detailed, high quality" },
+      "x": 350, "y": 50
+    },
+    "negative": {
+      "type": "clip_text_encode",
+      "widgets": { "text": "blurry, distorted, ugly" },
+      "x": 350, "y": 230
+    },
+    "inpaint": {
+      "type": "inpaint",
+      "widgets": { "seed": -1, "steps": 20, "cfg": 7.0, "denoise": 0.8 },
+      "x": 620, "y": 200
+    },
+    "save": {
+      "type": "save_image",
+      "widgets": { "filename_prefix": "inpaint" },
+      "x": 920, "y": 250
+    }
+  },
+  "edges": [
+    { "from_node": "checkpoint", "from_port": "MODEL", "to_node": "inpaint", "to_port": "MODEL" },
+    { "from_node": "checkpoint", "from_port": "CLIP", "to_node": "positive", "to_port": "CLIP" },
+    { "from_node": "checkpoint", "from_port": "CLIP", "to_node": "negative", "to_port": "CLIP" },
+    { "from_node": "load_img", "from_port": "IMAGE", "to_node": "inpaint", "to_port": "IMAGE" },
+    { "from_node": "mask", "from_port": "MASK", "to_node": "inpaint", "to_port": "MASK" },
+    { "from_node": "positive", "from_port": "CONDITIONING", "to_node": "inpaint", "to_port": "POSITIVE" },
+    { "from_node": "negative", "from_port": "CONDITIONING", "to_node": "inpaint", "to_port": "NEGATIVE" },
+    { "from_node": "inpaint", "from_port": "IMAGE", "to_node": "save", "to_port": "IMAGE" }
+  ]
+}
