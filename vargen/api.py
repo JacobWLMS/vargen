@@ -28,7 +28,7 @@ from .nodes.executor import GraphExecutor, CancelledError as GraphCancelledError
 from .nodes import loaders, conditioning, sampling, latent as latent_nodes, image as image_nodes
 from .nodes import controlnet as controlnet_nodes, ipadapter as ipadapter_nodes
 from .nodes import inpaint as inpaint_nodes, flux as flux_nodes
-from .nodes import model_utils as model_utils_nodes
+from .nodes import model_utils as model_utils_nodes, clip as clip_nodes
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,14 @@ _engine = create_engine(config=_config)
 
 app = FastAPI(title="vargen", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok", "version": "0.1.0"}
 
 
 # ── Settings ───────────────────────────────────────────────────
@@ -273,8 +281,10 @@ async def run_graph_ws(ws: WebSocket):
     loop = asyncio.get_event_loop()
 
     async def send(msg):
-        try: await ws.send_json(msg)
-        except: pass
+        try:
+            await ws.send_json(msg)
+        except Exception as e:
+            log.warning(f"WebSocket send failed: {e}")
 
     def on_start(nid, node, idx, total):
         asyncio.run_coroutine_threadsafe(
@@ -327,14 +337,18 @@ async def run_graph_ws(ws: WebSocket):
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
     contents = await file.read()
-    ext = Path(file.filename).suffix or ".png"
+    if len(contents) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, f"File too large. Max {MAX_UPLOAD_SIZE // (1024*1024)}MB")
+    ext = Path(file.filename or "image.png").suffix or ".png"
+    if ext.lower() not in ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff'):
+        raise HTTPException(400, f"Unsupported image format: {ext}")
     filename = f"{uuid.uuid4().hex[:12]}{ext}"
     filepath = UPLOAD_DIR / filename
     try:
         img = Image.open(io.BytesIO(contents))
         img.verify()
     except Exception:
-        raise HTTPException(400, "Invalid image file")
+        raise HTTPException(400, "Invalid or corrupted image file")
     with open(filepath, "wb") as f:
         f.write(contents)
     return {"filename": filename, "url": f"/api/uploads/{filename}"}

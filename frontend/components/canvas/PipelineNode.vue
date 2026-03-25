@@ -148,6 +148,8 @@ function getComboOptions(w: any): string[] {
   if (w.name === 'model' && props.node.type === 'load_flux') return getModelNames('diffusion_models', 'checkpoints')
   if (w.name === 'vae') return getModelNames('vae')
   if (w.name === 'embedding') return getModelNames('embeddings')
+  if (w.name === 'clip' || w.name === 'clip_1' || w.name === 'clip_2') return getModelNames('clip', 'text_encoders')
+  if (w.name === 'unet') return getModelNames('diffusion_models', 'unet')
   return w.options || []
 }
 function getModelNames(...cats: string[]): string[] {

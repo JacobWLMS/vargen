@@ -50,10 +50,11 @@ def exec_flux_sampler(inputs, widgets, ctx):
     if not pipe:
         raise ValueError("FLUX Sampler needs a pipeline — connect from Load FLUX")
 
-    prompt = ""
+    # Prompt from widget or from connected conditioning
+    prompt = widgets.get("prompt", "")
     positive = inputs.get("POSITIVE")
-    if positive:
-        prompt = positive.get("text", "")
+    if positive and positive.get("text"):
+        prompt = positive["text"]
 
     seed = int(widgets.get("seed", -1))
     steps = int(widgets.get("steps", 20))
@@ -99,6 +100,7 @@ register_node(NodeTypeDef(
     ],
     outputs=[PortDef("IMAGE", "IMAGE")],
     widgets=[
+        WidgetDef("prompt", "textarea", default="", label="Prompt"),
         WidgetDef("seed", "number", default=-1, label="Seed"),
         WidgetDef("steps", "slider", default=20, min=1, max=50, step=1, label="Steps"),
         WidgetDef("guidance", "slider", default=3.5, min=0, max=20, step=0.5, label="Guidance"),
@@ -106,5 +108,5 @@ register_node(NodeTypeDef(
         WidgetDef("height", "number", default=1024, min=512, max=2048, step=64, label="Height"),
     ],
     execute=exec_flux_sampler, color="#f59e0b",
-    description="FLUX-specific sampler — outputs IMAGE directly (no VAE Decode needed)",
+    description="FLUX sampler with built-in prompt. Outputs IMAGE directly (no VAE Decode needed).",
 ))

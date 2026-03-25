@@ -91,10 +91,12 @@ def exec_ksampler(inputs, widgets, ctx):
     # Swap scheduler
     _swap_scheduler(pipe, sampler, scheduler)
 
-    # Apply CLIP skip if set
+    # Apply CLIP skip if set (save and restore)
+    _original_layers = None
     if clip_skip > 0 and hasattr(pipe, 'text_encoder'):
         if hasattr(pipe.text_encoder.config, 'num_hidden_layers'):
-            pipe.text_encoder.config.num_hidden_layers -= clip_skip
+            _original_layers = pipe.text_encoder.config.num_hidden_layers
+            pipe.text_encoder.config.num_hidden_layers = _original_layers - clip_skip
 
     generator = torch.Generator("cpu").manual_seed(seed)
     width = inputs.get("_width", 1024)
@@ -156,6 +158,10 @@ def exec_ksampler(inputs, widgets, ctx):
     latent = result.images
     if not isinstance(latent, torch.Tensor):
         latent = torch.tensor(latent)
+
+    # Restore CLIP skip
+    if _original_layers is not None and hasattr(pipe, 'text_encoder'):
+        pipe.text_encoder.config.num_hidden_layers = _original_layers
 
     log.info(f"KSampler done: latent {latent.shape}")
     return {"LATENT": latent, "_pipe": pipe}
