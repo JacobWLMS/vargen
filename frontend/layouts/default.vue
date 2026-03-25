@@ -40,10 +40,11 @@
 <script setup lang="ts">
 const tabs = [
   { to: '/', label: 'Generate' },
-  { to: '/editor', label: 'Pipelines' },
-  { to: '/flow', label: 'Flow' },
+  { to: '/builder', label: 'Builder' },
+  { to: '/editor', label: 'YAML' },
   { to: '/gallery', label: 'Gallery' },
   { to: '/models', label: 'Models' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 const status = ref('Ready')

@@ -22,13 +22,23 @@ class StepResult:
         self.duration = duration
 
 
+class CancelledError(Exception):
+    pass
+
+
 class PipelineEngine:
-    """Execute pipelines with batch support and surgical VRAM management."""
+    """Execute pipelines with batch support, cancel, and surgical VRAM management."""
 
     def __init__(self, model_manager: ModelManager):
         self.mm = model_manager
         self._step_handlers: dict[str, Callable] = {}
+        self._cancelled = False
         self._register_builtins()
+
+    def cancel(self):
+        """Cancel the currently running pipeline."""
+        self._cancelled = True
+        log.info("Pipeline cancellation requested")
 
     def register_step(self, step_type: str, handler: Callable):
         """Register a custom step handler. Drop a .py in steps/ and call this."""
@@ -57,7 +67,13 @@ class PipelineEngine:
         log.info("Checking models...")
         self.mm.ensure_all(pipeline.required_models())
 
+        self._cancelled = False
+
         for i, step in enumerate(pipeline.steps):
+            if self._cancelled:
+                self.mm.unload_all()
+                raise CancelledError("Pipeline cancelled by user")
+
             if on_step_start:
                 on_step_start(step.name, i, len(pipeline.steps))
 
@@ -220,9 +236,11 @@ class PipelineEngine:
                 log.info(f"Loaded plugin: {mod.STEP_TYPE} from {py_file.name}")
 
 
-def create_engine(cache_dir: str | Path | None = None, search_paths: list[str] | None = None) -> PipelineEngine:
+def create_engine(cache_dir: str | Path | None = None, config: 'Config | None' = None) -> PipelineEngine:
     """Create a ready-to-use engine."""
-    mm = ModelManager(cache_dir=cache_dir, search_paths=search_paths)
+    from .config import Config
+    cfg = config or Config()
+    mm = ModelManager(config=cfg, cache_dir=cache_dir)
     engine = PipelineEngine(mm)
 
     # Auto-load plugins from ~/.vargen/plugins/

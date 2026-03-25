@@ -1,4 +1,4 @@
-"""FastAPI backend — serves the pipeline engine as an API."""
+"""FastAPI backend — pipeline engine API with settings, model browsing, cancel, queue."""
 
 import asyncio
 import logging
@@ -10,15 +10,15 @@ from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from PIL import Image
 import io
-import json
 
-from .schema import load_pipeline, dump_pipeline
-from .engine import create_engine
+from .schema import load_pipeline
+from .config import Config, browse_models
+from .engine import create_engine, CancelledError
 
 log = logging.getLogger(__name__)
 
@@ -28,49 +28,50 @@ UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
 OUTPUT_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# Global engine instance
-_engine = None
-
-
-def get_engine():
-    global _engine
-    if _engine is None:
-        search_paths = []
-        comfy = Path.home() / "ComfyUI" / "models"
-        if comfy.exists():
-            search_paths.append(str(comfy))
-        _engine = create_engine(search_paths=search_paths)
-    return _engine
-
+# Global state
+_config = Config()
+_engine = create_engine(config=_config)
 
 app = FastAPI(title="vargen", version="0.1.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# ── Settings ───────────────────────────────────────────────────
+
+@app.get("/api/settings")
+async def get_settings():
+    return _config.to_dict()
+
+
+class SettingsUpdate(BaseModel):
+    model_paths: Optional[list[str]] = None
+    output_dir: Optional[str] = None
+    vram_mode: Optional[str] = None
+    defaults: Optional[dict] = None
+
+
+@app.put("/api/settings")
+async def update_settings(req: SettingsUpdate):
+    updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    _config.update(updates)
+    # Reinitialize model manager with new paths
+    global _engine
+    _engine = create_engine(config=_config)
+    return {"status": "saved", "settings": _config.to_dict()}
 
 
 # ── Pipelines ──────────────────────────────────────────────────
 
 @app.get("/api/pipelines")
 async def list_pipelines():
-    """List available pipeline definitions."""
     pipelines = []
     if PIPELINES_DIR.exists():
         for f in sorted(PIPELINES_DIR.glob("*.yaml")):
             try:
                 p = load_pipeline(f)
                 pipelines.append({
-                    "id": f.stem,
-                    "name": p.name,
-                    "description": p.description,
-                    "tags": p.tags,
-                    "steps": len(p.steps),
-                    "models": len(p.models),
+                    "id": f.stem, "name": p.name, "description": p.description,
+                    "tags": p.tags, "steps": len(p.steps), "models": len(p.models),
                 })
             except Exception as e:
                 pipelines.append({"id": f.stem, "name": f.stem, "error": str(e)})
@@ -79,7 +80,6 @@ async def list_pipelines():
 
 @app.get("/api/pipelines/{pipeline_id}")
 async def get_pipeline(pipeline_id: str):
-    """Get a pipeline's YAML content."""
     path = PIPELINES_DIR / f"{pipeline_id}.yaml"
     if not path.exists():
         raise HTTPException(404, f"Pipeline '{pipeline_id}' not found")
@@ -92,13 +92,11 @@ class SavePipelineRequest(BaseModel):
 
 @app.put("/api/pipelines/{pipeline_id}")
 async def save_pipeline(pipeline_id: str, req: SavePipelineRequest):
-    """Save/update a pipeline YAML."""
-    import yaml as pyyaml
+    import yaml
     try:
-        pyyaml.safe_load(req.yaml)  # validate
+        yaml.safe_load(req.yaml)
     except Exception as e:
         raise HTTPException(400, f"Invalid YAML: {e}")
-
     path = PIPELINES_DIR / f"{pipeline_id}.yaml"
     path.write_text(req.yaml)
     return {"status": "saved", "id": pipeline_id}
@@ -117,14 +115,17 @@ async def delete_pipeline(pipeline_id: str):
 
 @app.get("/api/models/status")
 async def model_status():
-    """Get model manager status and VRAM info."""
-    engine = get_engine()
-    return engine.mm.status()
+    return _engine.mm.status()
+
+
+@app.get("/api/models/browse")
+async def browse_models_endpoint():
+    """Browse all models across configured paths, organized by category."""
+    return _engine.mm.browse()
 
 
 @app.post("/api/models/check")
 async def check_models(req: SavePipelineRequest):
-    """Check which models a pipeline needs and which are cached."""
     import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
         f.write(req.yaml)
@@ -134,41 +135,37 @@ async def check_models(req: SavePipelineRequest):
     finally:
         os.unlink(tmp)
 
-    engine = get_engine()
     results = []
     for ref in pipeline.required_models():
         results.append({
-            "name": ref.name,
-            "repo": ref.repo,
-            "file": ref.file,
-            "cached": engine.mm.is_cached(ref),
-            "vram_mb": ref.vram_mb,
-            "gated": ref.gated,
+            "name": ref.name, "repo": ref.repo, "file": ref.file,
+            "cached": _engine.mm.is_cached(ref), "vram_mb": ref.vram_mb, "gated": ref.gated,
         })
     return results
+
+
+@app.get("/api/models/downloads")
+async def download_progress():
+    """Get active download progress."""
+    return _engine.mm.downloads.get_all()
 
 
 # ── Upload ─────────────────────────────────────────────────────
 
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
-    """Upload a reference image."""
     contents = await file.read()
     ext = Path(file.filename).suffix or ".png"
     filename = f"{uuid.uuid4().hex[:12]}{ext}"
     filepath = UPLOAD_DIR / filename
-
-    # Validate it's an image
     try:
         img = Image.open(io.BytesIO(contents))
         img.verify()
     except Exception:
         raise HTTPException(400, "Invalid image file")
-
     with open(filepath, "wb") as f:
         f.write(contents)
-
-    return {"filename": filename, "path": str(filepath), "url": f"/api/uploads/{filename}"}
+    return {"filename": filename, "url": f"/api/uploads/{filename}"}
 
 
 @app.get("/api/uploads/{filename}")
@@ -183,15 +180,12 @@ async def serve_upload(filename: str):
 
 @app.get("/api/outputs")
 async def list_outputs(limit: int = 50):
-    """List generated output images."""
     outputs = []
     if OUTPUT_DIR.exists():
         for f in sorted(OUTPUT_DIR.glob("*.png"), reverse=True)[:limit]:
             outputs.append({
-                "filename": f.name,
-                "url": f"/api/outputs/{f.name}",
-                "size": f.stat().st_size,
-                "created": f.stat().st_mtime,
+                "filename": f.name, "url": f"/api/outputs/{f.name}",
+                "size": f.stat().st_size, "created": f.stat().st_mtime,
             })
     return outputs
 
@@ -202,6 +196,23 @@ async def serve_output(filename: str):
     if not path.exists():
         raise HTTPException(404)
     return FileResponse(path)
+
+
+@app.delete("/api/outputs/{filename}")
+async def delete_output(filename: str):
+    path = OUTPUT_DIR / filename
+    if not path.exists():
+        raise HTTPException(404)
+    path.unlink()
+    return {"status": "deleted"}
+
+
+# ── Cancel ─────────────────────────────────────────────────────
+
+@app.post("/api/cancel")
+async def cancel_run():
+    _engine.cancel()
+    return {"status": "cancelling"}
 
 
 # ── Run Pipeline ───────────────────────────────────────────────
@@ -215,80 +226,26 @@ class RunRequest(BaseModel):
 
 @app.post("/api/run")
 async def run_pipeline_sync(req: RunRequest):
-    """Run a pipeline synchronously. For short pipelines."""
-    engine = get_engine()
+    pipeline = _load_pipeline_from_req(req)
+    input_image = _load_input_image(req.image_filename)
 
-    # Load pipeline
-    if req.pipeline_yaml:
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(req.pipeline_yaml)
-            tmp = f.name
-        try:
-            pipeline = load_pipeline(tmp)
-        finally:
-            os.unlink(tmp)
-    elif req.pipeline_id:
-        path = PIPELINES_DIR / f"{req.pipeline_id}.yaml"
-        if not path.exists():
-            raise HTTPException(404, f"Pipeline '{req.pipeline_id}' not found")
-        pipeline = load_pipeline(path)
-    else:
-        raise HTTPException(400, "Provide pipeline_id or pipeline_yaml")
+    try:
+        results = _engine.run(pipeline, input_image=input_image, overrides=req.overrides)
+    except CancelledError:
+        return {"status": "cancelled"}
 
-    # Load input image
-    input_image = None
-    if req.image_filename:
-        img_path = UPLOAD_DIR / req.image_filename
-        if img_path.exists():
-            input_image = Image.open(img_path).convert("RGB")
-
-    # Run
-    results = engine.run(pipeline, input_image=input_image, overrides=req.overrides)
-
-    # Save outputs and build response
-    response = {"steps": {}}
-    for name, result in results.items():
-        step_data = {
-            "type": result.output_type,
-            "duration": result.duration,
-        }
-        if result.output_type == "image":
-            ts = int(time.time())
-            out_path = OUTPUT_DIR / f"{name}_{ts}.png"
-            result.output.save(out_path)
-            step_data["url"] = f"/api/outputs/{out_path.name}"
-        elif result.output_type == "images":
-            step_data["urls"] = []
-            for idx, img in enumerate(result.output):
-                ts = int(time.time())
-                out_path = OUTPUT_DIR / f"{name}_{ts}_{idx:03d}.png"
-                img.save(out_path)
-                step_data["urls"].append(f"/api/outputs/{out_path.name}")
-        elif result.output_type == "text":
-            step_data["text"] = str(result.output)
-        response["steps"][name] = step_data
-
-    return response
+    return _format_results(results, pipeline)
 
 
 # ── WebSocket for live progress ────────────────────────────────
 
 @app.websocket("/api/ws/run")
 async def run_pipeline_ws(ws: WebSocket):
-    """Run a pipeline with live progress via WebSocket.
-
-    Client sends: {"pipeline_id": "...", "image_filename": "...", "overrides": {...}}
-    Server sends: {"event": "step_start"|"step_done"|"batch_progress"|"complete"|"error", ...}
-    """
     await ws.accept()
-
     try:
         data = await ws.receive_json()
     except WebSocketDisconnect:
         return
-
-    engine = get_engine()
 
     # Load pipeline
     try:
@@ -307,13 +264,7 @@ async def run_pipeline_ws(ws: WebSocket):
         await ws.close()
         return
 
-    # Load input image
-    input_image = None
-    if data.get("image_filename"):
-        img_path = UPLOAD_DIR / data["image_filename"]
-        if img_path.exists():
-            input_image = Image.open(img_path).convert("RGB")
-
+    input_image = _load_input_image(data.get("image_filename"))
     loop = asyncio.get_event_loop()
 
     async def send(msg):
@@ -324,9 +275,7 @@ async def run_pipeline_ws(ws: WebSocket):
 
     def on_step_start(name, idx, total):
         asyncio.run_coroutine_threadsafe(
-            send({"event": "step_start", "step": name, "index": idx, "total": total}),
-            loop,
-        )
+            send({"event": "step_start", "step": name, "index": idx, "total": total}), loop)
 
     def on_step_done(name, result):
         msg = {"event": "step_done", "step": name, "type": result.output_type, "duration": result.duration}
@@ -343,47 +292,85 @@ async def run_pipeline_ws(ws: WebSocket):
                 img.save(out_path)
                 msg["urls"].append(f"/api/outputs/{out_path.name}")
         elif result.output_type == "text":
-            msg["text"] = str(result.output)[:500]
+            msg["text"] = str(result.output)[:1000]
         asyncio.run_coroutine_threadsafe(send(msg), loop)
 
     def on_batch(name, idx, total):
         asyncio.run_coroutine_threadsafe(
-            send({"event": "batch_progress", "step": name, "index": idx, "total": total}),
-            loop,
-        )
+            send({"event": "batch_progress", "step": name, "index": idx, "total": total}), loop)
 
-    # Run in thread to not block the event loop
     try:
-        results = await loop.run_in_executor(
-            None,
-            lambda: engine.run(
-                pipeline,
-                input_image=input_image,
-                overrides=data.get("overrides"),
-                on_step_start=on_step_start,
-                on_step_done=on_step_done,
-                on_batch_progress=on_batch,
-            ),
-        )
+        await loop.run_in_executor(None, lambda: _engine.run(
+            pipeline, input_image=input_image, overrides=data.get("overrides"),
+            on_step_start=on_step_start, on_step_done=on_step_done, on_batch_progress=on_batch,
+        ))
         await ws.send_json({"event": "complete"})
+    except CancelledError:
+        await ws.send_json({"event": "cancelled"})
     except Exception as e:
         await ws.send_json({"event": "error", "message": str(e)})
-
     await ws.close()
 
 
-# ── Step types info ────────────────────────────────────────────
+# ── Step types ─────────────────────────────────────────────────
 
 @app.get("/api/step-types")
 async def list_step_types():
-    """List available step types for pipeline authoring."""
-    engine = get_engine()
-    return engine.list_step_types()
+    return _engine.list_step_types()
 
 
-# ── Serve frontend in production ───────────────────────────────
-# Nuxt generate outputs to frontend/.output/public/
-# Mount AFTER all API routes so /api/* takes priority
+# ── Helpers ────────────────────────────────────────────────────
+
+def _load_pipeline_from_req(req: RunRequest):
+    if req.pipeline_yaml:
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(req.pipeline_yaml)
+            tmp = f.name
+        try:
+            return load_pipeline(tmp)
+        finally:
+            os.unlink(tmp)
+    elif req.pipeline_id:
+        path = PIPELINES_DIR / f"{req.pipeline_id}.yaml"
+        if not path.exists():
+            raise HTTPException(404, f"Pipeline '{req.pipeline_id}' not found")
+        return load_pipeline(path)
+    raise HTTPException(400, "Provide pipeline_id or pipeline_yaml")
+
+
+def _load_input_image(filename: Optional[str]) -> Optional[Image.Image]:
+    if not filename:
+        return None
+    img_path = UPLOAD_DIR / filename
+    if img_path.exists():
+        return Image.open(img_path).convert("RGB")
+    return None
+
+
+def _format_results(results, pipeline):
+    response = {"steps": {}}
+    for name, result in results.items():
+        step_data = {"type": result.output_type, "duration": result.duration}
+        if result.output_type == "image":
+            ts = int(time.time())
+            out_path = OUTPUT_DIR / f"{name}_{ts}.png"
+            result.output.save(out_path)
+            step_data["url"] = f"/api/outputs/{out_path.name}"
+        elif result.output_type == "images":
+            step_data["urls"] = []
+            for idx, img in enumerate(result.output):
+                ts = int(time.time())
+                out_path = OUTPUT_DIR / f"{name}_{ts}_{idx:03d}.png"
+                img.save(out_path)
+                step_data["urls"].append(f"/api/outputs/{out_path.name}")
+        elif result.output_type == "text":
+            step_data["text"] = str(result.output)
+        response["steps"][name] = step_data
+    return response
+
+
+# ── Serve frontend ─────────────────────────────────────────────
 
 FRONTEND_DIRS = [
     Path(__file__).parent.parent / "frontend" / ".output" / "public",
@@ -399,4 +386,4 @@ def mount_frontend():
             log.info(f"Serving frontend from {d}")
             break
     else:
-        log.warning("No built frontend found. Run 'cd frontend && npx nuxt generate' to build.")
+        log.warning("No built frontend found. Run: cd frontend && npx nuxt generate")
