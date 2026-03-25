@@ -1,0 +1,46 @@
+name: "Portrait — Outdoor Scene"
+description: "Generate a variation of a subject in an outdoor natural setting"
+version: 1
+tags: ["nsfw", "portrait", "outdoor", "flux"]
+
+models:
+  qwen-vl:
+    repo: "huchukato/Qwen3-VL-8B-Instruct-Abliterated"
+    vram_mb: 4800
+
+  flux-dev:
+    repo: "city96/FLUX.1-dev-gguf"
+    file: "flux1-dev-Q4_K_S.gguf"
+    format: gguf
+    vram_mb: 5300
+
+  realesrgan:
+    repo: "Comfy-Org/Real-ESRGAN_repackaged"
+    file: "RealESRGAN_x4plus.safetensors"
+    vram_mb: 100
+
+steps:
+  - name: caption
+    type: vision-llm
+    model: qwen-vl
+    prompt: "Describe this person's physical appearance, face, body type, and hair in detail. Do not describe the background or clothing."
+    prepend: "nsfw, nude, uncensored, outdoor photograph, golden hour sunlight, natural forest clearing, dappled light through trees, photorealistic, anatomically correct, detailed hands, five fingers per hand"
+    append: "8k resolution, ultra detailed, sharp focus, natural skin, raw photo, wide shot, full body"
+    max_tokens: 512
+
+  - name: generate
+    type: txt2img
+    model: flux-dev
+    prompt: "{caption}"
+    negative: "blurry, distorted, deformed, cartoon, anime, censored, bad anatomy, bad hands, extra fingers, missing fingers, indoor, studio"
+    width: 832
+    height: 1216
+    steps: 20
+    guidance: 3.5
+    seed: -1
+
+  - name: upscale
+    type: pixel-upscale
+    model: realesrgan
+    input: "{generate}"
+    scale: 2

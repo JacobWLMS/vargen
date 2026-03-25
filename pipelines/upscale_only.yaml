@@ -1,0 +1,17 @@
+name: "Quick Upscale"
+description: "2x upscale any image with RealESRGAN — no generation, just enhance"
+version: 1
+tags: ["upscale", "enhance", "quick"]
+
+models:
+  realesrgan:
+    repo: "Comfy-Org/Real-ESRGAN_repackaged"
+    file: "RealESRGAN_x4plus.safetensors"
+    vram_mb: 100
+
+steps:
+  - name: upscale
+    type: pixel-upscale
+    model: realesrgan
+    input: "{input}"
+    scale: 2

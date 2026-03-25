@@ -1,0 +1,46 @@
+name: "Quick Variations (SDXL Pony DMD)"
+description: "Fast 4-step generation using SDXL Pony DMD — lower quality but near-instant results"
+version: 1
+tags: ["nsfw", "portrait", "fast", "sdxl", "pony"]
+
+models:
+  qwen-vl:
+    repo: "huchukato/Qwen3-VL-8B-Instruct-Abliterated"
+    vram_mb: 4800
+
+  pony-xl:
+    repo: "local"
+    file: "gonzalomoXLFluxPony_v60PhotoXLDMD.safetensors"
+    vram_mb: 6500
+
+  realesrgan:
+    repo: "Comfy-Org/Real-ESRGAN_repackaged"
+    file: "RealESRGAN_x4plus.safetensors"
+    vram_mb: 100
+
+steps:
+  - name: caption
+    type: vision-llm
+    model: qwen-vl
+    prompt: "Describe this person's physical appearance, face, body type, and hair in detail. Do not describe the background or clothing."
+    prepend: "score_9, score_8_up, score_7_up, nsfw, nude, uncensored, professional photograph, natural lighting, photorealistic, anatomically correct, detailed hands"
+    append: "8k, ultra detailed, sharp focus, raw photo"
+    max_tokens: 512
+
+  - name: generate
+    type: txt2img
+    model: pony-xl
+    architecture: sdxl
+    prompt: "{caption}"
+    negative: "score_1, score_2, score_3, blurry, distorted, deformed, cartoon, anime, censored, bad anatomy, bad hands, extra fingers, worst quality"
+    width: 1024
+    height: 1024
+    steps: 4
+    guidance: 1.5
+    seed: -1
+
+  - name: upscale
+    type: pixel-upscale
+    model: realesrgan
+    input: "{generate}"
+    scale: 2

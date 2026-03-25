@@ -1,0 +1,16 @@
+name: "Caption Image"
+description: "Describe any image in detail using QwenVL — useful for testing prompts before generating"
+version: 1
+tags: ["caption", "describe", "utility"]
+
+models:
+  qwen-vl:
+    repo: "huchukato/Qwen3-VL-8B-Instruct-Abliterated"
+    vram_mb: 4800
+
+steps:
+  - name: caption
+    type: vision-llm
+    model: qwen-vl
+    prompt: "Describe this image in complete detail. Include the subject's appearance, pose, expression, clothing, setting, lighting, and mood."
+    max_tokens: 1024
