@@ -56,8 +56,9 @@ class VargenApp:
 
     def check_models(self, yaml_text: str) -> str:
         """Check which models are cached and which need downloading."""
+        if not yaml_text:
+            return "No pipeline loaded. Select one from the dropdown."
         try:
-            # Write to temp, parse, check
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
                 f.write(yaml_text)
@@ -91,11 +92,14 @@ class VargenApp:
         """Run a pipeline and yield results progressively."""
         import tempfile
 
+        if not yaml_text:
+            yield None, [], "Error: Select a pipeline first"
+            return
         if input_image is None:
             yield None, [], "Error: Upload an input image first"
             return
 
-        # Parse pipeline from editor text
+        import tempfile
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write(yaml_text)
             tmp = f.name
@@ -205,8 +209,10 @@ def build_ui(app: VargenApp) -> gr.Blocks:
                             elem_classes=["status-box"],
                         )
 
-                # Load pipeline YAML when dropdown changes
-                pipeline_yaml_hidden = gr.State("")
+                # Load pipeline YAML when dropdown changes — preload first pipeline
+                initial_pipeline = app.list_pipelines()[0] if app.list_pipelines() else ""
+                initial_yaml = app.load_pipeline_yaml(initial_pipeline) if initial_pipeline else ""
+                pipeline_yaml_hidden = gr.State(initial_yaml)
 
                 def on_pipeline_select(name):
                     if name:

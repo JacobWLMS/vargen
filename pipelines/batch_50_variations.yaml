@@ -1,0 +1,36 @@
+name: "50 Variations — Batch Generator"
+description: "Generate 50 different variations of a subject from a single reference photo"
+version: 1
+tags: ["nsfw", "batch", "variations", "flux"]
+
+models:
+  qwen-vl:
+    repo: "huchukato/Qwen3-VL-8B-Instruct-Abliterated"
+    vram_mb: 4800
+
+  flux-dev:
+    repo: "city96/FLUX.1-dev-gguf"
+    file: "flux1-dev-Q4_K_S.gguf"
+    format: gguf
+    vram_mb: 5300
+
+steps:
+  - name: caption
+    type: vision-llm
+    model: qwen-vl
+    prompt: "Describe this person's physical appearance, face, body type, and hair in detail. Do not describe the background or clothing."
+    prepend: "nsfw, nude, uncensored, professional photograph, photorealistic, anatomically correct, detailed hands, five fingers per hand"
+    append: "8k resolution, ultra detailed, sharp focus, raw photo"
+    max_tokens: 512
+
+  - name: generate
+    type: txt2img
+    model: flux-dev
+    prompt: "{caption}"
+    negative: "blurry, distorted, deformed, cartoon, anime, censored, bad anatomy, bad hands, extra fingers, worst quality"
+    width: 1024
+    height: 1024
+    steps: 20
+    guidance: 3.5
+    seed: -1
+    batch_count: 50

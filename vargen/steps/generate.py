@@ -1,4 +1,4 @@
-"""Text-to-image generation step — supports FLUX, SDXL, SD1.5, and variants."""
+"""Text-to-image generation step — supports FLUX, SDXL, SD1.5 with IP-Adapter, ControlNet, LoRA."""
 
 import logging
 import torch
@@ -8,17 +8,16 @@ from PIL import Image
 log = logging.getLogger(__name__)
 
 
-def run_txt2img(model_ref, params: dict, mm, pipeline) -> Image.Image:
-    """Generate an image from text.
+def run_txt2img(model_ref, params: dict, mm, pipeline) -> Image.Image | list[Image.Image]:
+    """Generate image(s) from text. Supports IP-Adapter, ControlNet, LoRA as modifiers.
 
     Params:
-        prompt: text prompt (or {caption} reference)
-        negative: negative prompt
-        width: image width (default: 1024)
-        height: image height (default: 1024)
-        steps: inference steps (default: 20)
-        guidance: guidance scale (default: 3.5 for FLUX, 7.0 for SDXL)
-        seed: random seed (-1 for random)
+        prompt, negative, width, height, steps, guidance, seed, architecture
+    Modifiers (from StepConfig, injected by engine):
+        _ip_adapter: IPAdapterConfig
+        _controlnet: ControlNetConfig
+        _loras: list[LoRAConfig]
+        _batch_index: int (current batch iteration)
     """
     prompt = params.get("prompt", "")
     negative = params.get("negative", "")
@@ -28,21 +27,84 @@ def run_txt2img(model_ref, params: dict, mm, pipeline) -> Image.Image:
     guidance = params.get("guidance", 3.5)
     seed = params.get("seed", -1)
 
-    generator = None if seed == -1 else torch.Generator("cpu").manual_seed(seed)
+    # For batch mode, vary the seed per iteration
+    batch_idx = params.get("_batch_index", 0)
+    if seed == -1:
+        generator = None
+    else:
+        generator = torch.Generator("cpu").manual_seed(seed + batch_idx)
 
     model_path = mm.model_path(model_ref)
     fmt = model_ref.format or _detect_format(model_path)
     arch = params.get("architecture", _guess_architecture(model_ref, fmt))
 
-    log.info(f"Loading: {model_ref.repo} (format={fmt}, arch={arch}, quantize={model_ref.quantize})")
+    # Get modifier configs (injected by engine)
+    ip_adapter_cfg = params.get("_ip_adapter")
+    controlnet_cfg = params.get("_controlnet")
+    lora_cfgs = params.get("_loras", [])
 
+    log.info(f"Loading: {model_ref.repo} (arch={arch}, quantize={model_ref.quantize})")
+    if ip_adapter_cfg:
+        log.info(f"  + IP-Adapter: {ip_adapter_cfg.model} (weight={ip_adapter_cfg.weight})")
+    if controlnet_cfg:
+        log.info(f"  + ControlNet: {controlnet_cfg.model} (strength={controlnet_cfg.strength})")
+    if lora_cfgs:
+        log.info(f"  + LoRAs: {[l.model for l in lora_cfgs]}")
+
+    # Load base pipeline
     loader = LOADERS.get(arch)
     if not loader:
         raise ValueError(f"Unknown architecture: {arch}. Supported: {list(LOADERS.keys())}")
-
     pipe = loader(model_ref, params, mm, pipeline, model_path)
 
-    # Memory optimization — always enable for low VRAM
+    # Apply LoRAs
+    for lora_cfg in lora_cfgs:
+        lora_ref = pipeline.models.get(lora_cfg.model)
+        if lora_ref:
+            lora_path = mm.model_path(lora_ref)
+            log.info(f"  Loading LoRA: {lora_path}")
+            pipe.load_lora_weights(str(lora_path))
+            pipe.fuse_lora(lora_scale=lora_cfg.weight)
+
+    # Apply IP-Adapter
+    ip_image = None
+    if ip_adapter_cfg:
+        ipa_ref = pipeline.models.get(ip_adapter_cfg.model)
+        if ipa_ref:
+            ipa_path = mm.model_path(ipa_ref)
+            log.info(f"  Loading IP-Adapter: {ipa_path}")
+            # diffusers native IP-Adapter support
+            if ipa_ref.subfolder:
+                pipe.load_ip_adapter(
+                    str(ipa_path.parent) if ipa_path.is_file() else str(ipa_path),
+                    subfolder=ipa_ref.subfolder,
+                    weight_name=ipa_path.name if ipa_path.is_file() else None,
+                )
+            else:
+                pipe.load_ip_adapter(
+                    ipa_ref.repo,
+                    weight_name=ipa_ref.file,
+                )
+            pipe.set_ip_adapter_scale(ip_adapter_cfg.weight)
+            # Resolve reference image
+            ref_key = ip_adapter_cfg.reference.strip("{}")
+            ip_image = params.get(ref_key) or params.get("input_image")
+
+    # Apply ControlNet
+    if controlnet_cfg:
+        cn_ref = pipeline.models.get(controlnet_cfg.model)
+        if cn_ref:
+            cn_path = mm.model_path(cn_ref)
+            log.info(f"  Loading ControlNet: {cn_path}")
+            from diffusers import ControlNetModel
+            controlnet = ControlNetModel.from_pretrained(
+                str(cn_path) if cn_path.is_dir() else cn_ref.repo,
+                torch_dtype=torch.float16,
+            )
+            # Rebuild pipeline with controlnet
+            pipe = _rebuild_with_controlnet(pipe, controlnet, arch)
+
+    # Memory optimization
     if hasattr(pipe, "enable_model_cpu_offload"):
         pipe.enable_model_cpu_offload()
     if hasattr(pipe, "enable_attention_slicing"):
@@ -61,106 +123,104 @@ def run_txt2img(model_ref, params: dict, mm, pipeline) -> Image.Image:
         "generator": generator,
     }
 
-    # Negative prompt not supported by FLUX
-    if negative and arch != "flux":
+    if negative and arch not in ("flux", "flux-gguf"):
         kwargs["negative_prompt"] = negative
+
+    if ip_image is not None:
+        kwargs["ip_adapter_image"] = ip_image
+
+    if controlnet_cfg:
+        cn_image = params.get("_controlnet_image") or params.get("input_image")
+        if cn_image:
+            kwargs["image"] = cn_image
+            kwargs["controlnet_conditioning_scale"] = controlnet_cfg.strength
 
     result = pipe(**kwargs)
     return result.images[0]
 
 
+def _rebuild_with_controlnet(pipe, controlnet, arch):
+    """Rebuild a pipeline with ControlNet support."""
+    if arch in ("sdxl", "auto"):
+        from diffusers import StableDiffusionXLControlNetPipeline
+        return StableDiffusionXLControlNetPipeline(
+            vae=pipe.vae, text_encoder=pipe.text_encoder,
+            text_encoder_2=pipe.text_encoder_2, tokenizer=pipe.tokenizer,
+            tokenizer_2=pipe.tokenizer_2, unet=pipe.unet,
+            controlnet=controlnet, scheduler=pipe.scheduler,
+        )
+    elif arch in ("sd15", "sd"):
+        from diffusers import StableDiffusionControlNetPipeline
+        return StableDiffusionControlNetPipeline(
+            vae=pipe.vae, text_encoder=pipe.text_encoder,
+            tokenizer=pipe.tokenizer, unet=pipe.unet,
+            controlnet=controlnet, scheduler=pipe.scheduler,
+            safety_checker=None, feature_extractor=None,
+        )
+    # FLUX ControlNet handled differently
+    return pipe
+
+
 # ── Architecture-specific loaders ──────────────────────────────
 
 def _load_flux_gguf(model_ref, params, mm, pipeline, model_path):
-    """FLUX with GGUF quantized transformer."""
     from diffusers import FluxPipeline, FluxTransformer2DModel, GGUFQuantizationConfig
-
     gguf_config = GGUFQuantizationConfig(compute_dtype=torch.bfloat16)
     transformer = FluxTransformer2DModel.from_single_file(
-        str(model_path),
-        quantization_config=gguf_config,
-        torch_dtype=torch.bfloat16,
+        str(model_path), quantization_config=gguf_config, torch_dtype=torch.bfloat16,
     )
-
-    # Load remaining components from base repo
     pipe = FluxPipeline.from_pretrained(
-        "black-forest-labs/FLUX.1-dev",
-        transformer=transformer,
-        torch_dtype=torch.bfloat16,
+        "black-forest-labs/FLUX.1-dev", transformer=transformer, torch_dtype=torch.bfloat16,
     )
     return pipe
 
 
 def _load_flux_diffusers(model_ref, params, mm, pipeline, model_path):
-    """FLUX from diffusers-format repo or single file."""
     from diffusers import FluxPipeline
-
-    quant_config = _get_quant_config(model_ref.quantize)
     kwargs = {"torch_dtype": torch.bfloat16}
-    if quant_config:
-        kwargs["quantization_config"] = quant_config
-
+    quant = _get_quant_config(model_ref.quantize)
+    if quant:
+        kwargs["quantization_config"] = quant
     if model_path.is_file():
-        pipe = FluxPipeline.from_single_file(str(model_path), **kwargs)
-    else:
-        pipe = FluxPipeline.from_pretrained(str(model_path), **kwargs)
-    return pipe
+        return FluxPipeline.from_single_file(str(model_path), **kwargs)
+    return FluxPipeline.from_pretrained(str(model_path), **kwargs)
 
 
 def _load_sdxl(model_ref, params, mm, pipeline, model_path):
-    """SDXL from checkpoint file or diffusers repo."""
     from diffusers import StableDiffusionXLPipeline
-
-    quant_config = _get_quant_config(model_ref.quantize)
     kwargs = {"torch_dtype": torch.float16}
-    if quant_config:
-        kwargs["quantization_config"] = quant_config
-
+    quant = _get_quant_config(model_ref.quantize)
+    if quant:
+        kwargs["quantization_config"] = quant
     if model_path.is_file():
-        pipe = StableDiffusionXLPipeline.from_single_file(str(model_path), **kwargs)
-    else:
-        pipe = StableDiffusionXLPipeline.from_pretrained(str(model_path), **kwargs)
-    return pipe
+        return StableDiffusionXLPipeline.from_single_file(str(model_path), **kwargs)
+    return StableDiffusionXLPipeline.from_pretrained(str(model_path), **kwargs)
 
 
 def _load_sd15(model_ref, params, mm, pipeline, model_path):
-    """SD 1.5 from checkpoint file or diffusers repo."""
     from diffusers import StableDiffusionPipeline
-
-    quant_config = _get_quant_config(model_ref.quantize)
     kwargs = {"torch_dtype": torch.float16}
-    if quant_config:
-        kwargs["quantization_config"] = quant_config
-
+    quant = _get_quant_config(model_ref.quantize)
+    if quant:
+        kwargs["quantization_config"] = quant
     if model_path.is_file():
-        pipe = StableDiffusionPipeline.from_single_file(str(model_path), **kwargs)
-    else:
-        pipe = StableDiffusionPipeline.from_pretrained(str(model_path), **kwargs)
-    return pipe
+        return StableDiffusionPipeline.from_single_file(str(model_path), **kwargs)
+    return StableDiffusionPipeline.from_pretrained(str(model_path), **kwargs)
 
 
 def _load_auto(model_ref, params, mm, pipeline, model_path):
-    """Auto-detect pipeline type."""
     from diffusers import AutoPipelineForText2Image
-
-    quant_config = _get_quant_config(model_ref.quantize)
     kwargs = {"torch_dtype": torch.bfloat16, "trust_remote_code": True}
-    if quant_config:
-        kwargs["quantization_config"] = quant_config
-
+    quant = _get_quant_config(model_ref.quantize)
+    if quant:
+        kwargs["quantization_config"] = quant
     if model_path.is_file():
-        # Try SDXL first for single files, fall back to SD1.5
         try:
-            from diffusers import StableDiffusionXLPipeline
-            return StableDiffusionXLPipeline.from_single_file(str(model_path), **kwargs)
+            return _load_sdxl(model_ref, params, mm, pipeline, model_path)
         except Exception:
-            from diffusers import StableDiffusionPipeline
-            return StableDiffusionPipeline.from_single_file(str(model_path), **kwargs)
-    else:
-        return AutoPipelineForText2Image.from_pretrained(str(model_path), **kwargs)
+            return _load_sd15(model_ref, params, mm, pipeline, model_path)
+    return AutoPipelineForText2Image.from_pretrained(str(model_path), **kwargs)
 
-
-# ── Registry ───────────────────────────────────────────────────
 
 LOADERS = {
     "flux": _load_flux_diffusers,
@@ -172,45 +232,26 @@ LOADERS = {
 }
 
 
-# ── Helpers ────────────────────────────────────────────────────
-
-def _get_quant_config(quantize: str | None):
-    """Build a BitsAndBytesConfig from quantization string."""
+def _get_quant_config(quantize):
     if not quantize:
         return None
-
     from diffusers import BitsAndBytesConfig
-
     if quantize == "nf4":
-        return BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
+        return BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16)
     elif quantize in ("fp8", "int8"):
         return BitsAndBytesConfig(load_in_8bit=True)
-    elif quantize == "fp4":
-        return BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="fp4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
     return None
 
 
-def _detect_format(path: Path) -> str:
-    """Detect model format from file extension."""
+def _detect_format(path):
     p = Path(path)
     if p.is_dir():
         return "diffusers"
-    suffix = p.suffix.lower()
-    return {"gguf": "gguf", ".safetensors": "safetensors", ".bin": "bin", ".ckpt": "checkpoint"}.get(suffix, "unknown")
+    return {".gguf": "gguf", ".safetensors": "safetensors", ".bin": "bin", ".ckpt": "checkpoint"}.get(p.suffix.lower(), "unknown")
 
 
-def _guess_architecture(model_ref, fmt: str) -> str:
-    """Guess model architecture from name/repo/format."""
+def _guess_architecture(model_ref, fmt):
     name = (model_ref.repo + (model_ref.file or "")).lower()
-
     if fmt == "gguf" and "flux" in name:
         return "flux-gguf"
     if "flux" in name:
@@ -219,6 +260,4 @@ def _guess_architecture(model_ref, fmt: str) -> str:
         return "sdxl"
     if "sd15" in name or "sd_1" in name or "v1-5" in name:
         return "sd15"
-
-    # Default to auto-detection
     return "auto"
