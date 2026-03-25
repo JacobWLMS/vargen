@@ -60,10 +60,6 @@ export const useWorkspaceStore = defineStore('workspace', {
     bottomPanelHeight: 200,
     bottomTab: 'output' as 'output' | 'console',
 
-    // YAML panel
-    yamlPanelOpen: false,
-    yamlPanelWidth: 400,
-
     // Node type definitions (from API)
     nodeTypes: {} as Record<string, any>,
 
@@ -214,113 +210,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       } catch (e: any) {
         this.log('error', `Save failed: ${e.message}`)
       }
-    },
-
-    // ── YAML ─────────────────────────────────
-
-    toYaml(): string {
-      let yaml = `name: "${this.pipelineName}"\ndescription: "${this.pipelineDescription}"\nversion: 1\n\nmodels: {}\n\nsteps:\n`
-      // Topological sort by edges (simple: use node order for now)
-      for (const node of this.nodes) {
-        yaml += `  - name: ${node.name}\n    type: ${node.type}\n    model: ${node.model}\n`
-        // Find incoming edges to set {ref} params
-        const incoming = this.edges.filter(e => e.to === node.id)
-        for (const edge of incoming) {
-          const sourceNode = this.nodes.find(n => n.id === edge.from)
-          if (sourceNode) {
-            yaml += `    ${edge.param}: "{${sourceNode.name}}"\n`
-          }
-        }
-        for (const [k, v] of Object.entries(node.params)) {
-          if (v === '' || v === null || v === undefined) continue
-          if (k === 'batch_count' && v === 1) continue
-          // Skip params that are set by edges
-          if (incoming.some(e => e.param === k)) continue
-          yaml += `    ${k}: ${typeof v === 'string' && v.includes(' ') ? `"${v}"` : v}\n`
-        }
-      }
-      return yaml
-    },
-
-    fromYaml(yamlText: string) {
-      this.nodes = []
-      this.edges = []
-
-      const lines = yamlText.split('\n')
-      let current: any = null
-      let inSteps = false
-      let idx = 0
-      const nodeMap: Record<string, string> = {} // name -> id
-
-      // Parse metadata
-      for (const line of lines) {
-        const nameMatch = line.match(/^name:\s*["']?(.+?)["']?\s*$/)
-        const descMatch = line.match(/^description:\s*["']?(.+?)["']?\s*$/)
-        if (nameMatch) this.pipelineName = nameMatch[1]
-        if (descMatch) this.pipelineDescription = descMatch[1]
-      }
-
-      // Parse steps
-      for (const line of lines) {
-        if (line.trim() === 'steps:') { inSteps = true; continue }
-        if (line.match(/^[a-z]/) && line.includes(':') && inSteps && !line.startsWith(' ')) { inSteps = false; continue }
-
-        if (inSteps && line.match(/^\s{2}- name:\s*(.+)/)) {
-          if (current) {
-            const node = this.addNode(current.type || 'txt2img', 100 + idx * 240, 200)
-            node.name = current.name
-            node.model = current.model || ''
-            node.params = { ...node.params, ...current.params }
-            nodeMap[current.name] = node.id
-            idx++
-          }
-          const name = line.match(/name:\s*(.+)/)![1].trim().replace(/['"]/g, '')
-          current = { name, type: '', model: '', params: {} }
-        } else if (inSteps && current) {
-          const m = line.match(/^\s{4}(\w+):\s*(.+)/)
-          if (m) {
-            const [_, key, rawVal] = m
-            const val = rawVal.trim().replace(/^["']|["']$/g, '')
-            if (key === 'type') current.type = val
-            else if (key === 'model') current.model = val
-            else if (key === 'batch_count') current.params.batch_count = parseInt(val)
-            else if (!['name', 'ip_adapter', 'controlnet', 'loras'].includes(key)) {
-              // Check for {ref} pattern
-              const refMatch = val.match(/^\{(.+)\}$/)
-              if (refMatch) {
-                // Will create edge after all nodes are parsed
-                current.params[`_ref_${key}`] = refMatch[1]
-              } else {
-                current.params[key] = isNaN(Number(val)) ? val : Number(val)
-              }
-            }
-          }
-        }
-      }
-      // Last node
-      if (current) {
-        const node = this.addNode(current.type || 'txt2img', 100 + idx * 240, 200)
-        node.name = current.name
-        node.model = current.model || ''
-        node.params = { ...node.params, ...current.params }
-        nodeMap[current.name] = node.id
-      }
-
-      // Create edges from {ref} params
-      for (const node of this.nodes) {
-        const refKeys = Object.keys(node.params).filter(k => k.startsWith('_ref_'))
-        for (const refKey of refKeys) {
-          const param = refKey.replace('_ref_', '')
-          const sourceName = node.params[refKey]
-          const sourceId = nodeMap[sourceName]
-          if (sourceId) {
-            this.addEdge(sourceId, node.id, param)
-          }
-          delete node.params[refKey]
-        }
-      }
-
-      this.selectedNodeId = this.nodes[0]?.id || null
     },
 
     // ── Models ───────────────────────────────

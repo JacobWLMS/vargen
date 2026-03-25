@@ -30,11 +30,6 @@
         </div>
       </div>
 
-      <!-- Right: YAML Editor (togglable) -->
-      <div v-if="store.yamlPanelOpen" class="relative shrink-0 flex" :style="{ width: store.yamlPanelWidth + 'px' }">
-        <ResizeHandle side="left" v-model="store.yamlPanelWidth" :min="250" :max="700" />
-        <YamlEditor class="flex-1" />
-      </div>
     </div>
 
     <WorkspaceStatusBar />
@@ -70,6 +65,5 @@ function onKey(e: KeyboardEvent) {
   if ((e.key === 'Delete' || e.key === 'Backspace') && store.selectedNodeId && !inInput) store.removeNode(store.selectedNodeId)
   if (e.ctrlKey && e.key === '1') { e.preventDefault(); store.assetPanelOpen = !store.assetPanelOpen }
   if (e.ctrlKey && e.key === '3') { e.preventDefault(); store.outputBarOpen = !store.outputBarOpen }
-  if (e.ctrlKey && e.key === '`') { e.preventDefault(); store.yamlPanelOpen = !store.yamlPanelOpen }
 }
 </script>
