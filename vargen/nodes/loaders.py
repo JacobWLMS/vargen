@@ -92,15 +92,6 @@ def exec_load_image(inputs, widgets, ctx):
     return {"IMAGE": image}
 
 
-def exec_empty_latent(inputs, widgets, ctx):
-    width = int(widgets.get("width", 1024))
-    height = int(widgets.get("height", 1024))
-    batch = int(widgets.get("batch_size", 1))
-    latent = torch.randn(batch, 4, height // 8, width // 8, dtype=torch.float16)
-    log.info(f"Empty latent: {batch}x4x{height // 8}x{width // 8}")
-    return {"LATENT": latent, "_width": width, "_height": height}
-
-
 def exec_load_upscale_model(inputs, widgets, ctx):
     model_name = widgets.get("model", "")
     if not model_name:
@@ -116,60 +107,6 @@ def exec_load_upscale_model(inputs, widgets, ctx):
         model = model.cuda()
     log.info(f"Loaded upscale model: {model_name}")
     return {"UPSCALE_MODEL": model}
-
-
-# ── VAE nodes ─────────────────────────────────
-
-def exec_vae_decode(inputs, widgets, ctx):
-    vae = inputs.get("VAE")
-    latent = inputs.get("LATENT")
-    if vae is None:
-        raise ValueError("VAE Decode needs a VAE input")
-    if latent is None:
-        raise ValueError("VAE Decode needs a LATENT input")
-
-    log.info(f"VAE Decode: latent shape {latent.shape}")
-    device = next(vae.parameters()).device if hasattr(vae, 'parameters') else 'cpu'
-
-    with torch.no_grad():
-        latent = latent.to(device=device, dtype=vae.dtype)
-        # Scale latent
-        if hasattr(vae, 'config') and hasattr(vae.config, 'scaling_factor'):
-            latent = latent / vae.config.scaling_factor
-        image = vae.decode(latent, return_dict=False)[0]
-
-    # Convert to PIL
-    image = (image / 2 + 0.5).clamp(0, 1)
-    image = image.cpu().permute(0, 2, 3, 1).float().numpy()
-    image = (image[0] * 255).round().astype("uint8")
-    result = Image.fromarray(image)
-    log.info(f"VAE Decoded: {result.size}")
-    return {"IMAGE": result}
-
-
-def exec_vae_encode(inputs, widgets, ctx):
-    vae = inputs.get("VAE")
-    image = inputs.get("IMAGE")
-    if vae is None or image is None:
-        raise ValueError("VAE Encode needs both VAE and IMAGE")
-
-    import numpy as np
-    log.info(f"VAE Encode: image {image.size}")
-    device = next(vae.parameters()).device if hasattr(vae, 'parameters') else 'cpu'
-
-    # PIL to tensor
-    img_np = np.array(image.convert("RGB")).astype(np.float32) / 255.0
-    img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)
-    img_tensor = img_tensor * 2.0 - 1.0  # normalize to [-1, 1]
-    img_tensor = img_tensor.to(device=device, dtype=vae.dtype)
-
-    with torch.no_grad():
-        latent = vae.encode(img_tensor).latent_dist.sample()
-        if hasattr(vae, 'config') and hasattr(vae.config, 'scaling_factor'):
-            latent = latent * vae.config.scaling_factor
-
-    log.info(f"VAE Encoded: {latent.shape}")
-    return {"LATENT": latent}
 
 
 # ── Register ──────────────────────────────────
@@ -201,38 +138,8 @@ register_node(NodeTypeDef(
 ))
 
 register_node(NodeTypeDef(
-    type_id="empty_latent", category="loaders", label="Empty Latent Image",
-    inputs=[],
-    outputs=[PortDef("LATENT", "LATENT")],
-    widgets=[
-        WidgetDef("width", "number", default=1024, min=64, max=4096, step=64, label="Width"),
-        WidgetDef("height", "number", default=1024, min=64, max=4096, step=64, label="Height"),
-        WidgetDef("batch_size", "number", default=1, min=1, max=64, step=1, label="Batch"),
-    ],
-    execute=exec_empty_latent, color="#ff80c0",
-))
-
-register_node(NodeTypeDef(
     type_id="load_upscale_model", category="loaders", label="Load Upscale Model",
     inputs=[], outputs=[PortDef("UPSCALE_MODEL", "UPSCALE_MODEL")],
     widgets=[WidgetDef("model", "combo", label="Model", options=[])],
     execute=exec_load_upscale_model, color="#60a0ff",
-))
-
-register_node(NodeTypeDef(
-    type_id="vae_decode", category="loaders", label="VAE Decode",
-    inputs=[PortDef("VAE", "VAE"), PortDef("LATENT", "LATENT")],
-    outputs=[PortDef("IMAGE", "IMAGE")],
-    widgets=[],
-    execute=exec_vae_decode, color="#ff6060",
-    description="Decode latent to image using VAE",
-))
-
-register_node(NodeTypeDef(
-    type_id="vae_encode", category="loaders", label="VAE Encode",
-    inputs=[PortDef("VAE", "VAE"), PortDef("IMAGE", "IMAGE")],
-    outputs=[PortDef("LATENT", "LATENT")],
-    widgets=[],
-    execute=exec_vae_encode, color="#ff6060",
-    description="Encode image to latent using VAE",
 ))

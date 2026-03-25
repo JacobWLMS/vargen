@@ -23,7 +23,7 @@ from .nodes import get_all_node_types, get_node_types_by_category
 from .nodes.executor import GraphExecutor, CancelledError as GraphCancelledError
 
 # Import node modules to trigger registration
-from .nodes import loaders, conditioning, sampling, image as image_nodes
+from .nodes import loaders, conditioning, sampling, latent as latent_nodes, image as image_nodes
 
 log = logging.getLogger(__name__)
 
