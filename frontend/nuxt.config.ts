@@ -1,11 +1,14 @@
 export default defineNuxtConfig({
-  devtools: { enabled: true },
-  modules: ['@nuxtjs/tailwindcss', '@nuxtjs/color-mode'],
+  devtools: { enabled: false },
+  modules: ['@nuxtjs/tailwindcss'],
+  css: ['~/assets/css/main.css'],
 
-  colorMode: {
-    preference: 'dark',
-    fallback: 'dark',
-    classSuffix: '',
+  tailwindcss: {
+    config: {
+      darkMode: 'class',
+      theme: { extend: {} },
+      content: [],
+    },
   },
 
   runtimeConfig: {
@@ -17,8 +20,9 @@ export default defineNuxtConfig({
   app: {
     head: {
       title: 'vargen',
+      htmlAttrs: { class: 'dark' },
       meta: [
-        { name: 'description', content: 'AI-native image generation pipelines' },
+        { name: 'theme-color', content: '#000000' },
       ],
     },
   },

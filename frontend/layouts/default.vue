@@ -1,41 +1,50 @@
 <template>
-  <div class="min-h-screen bg-gray-950 text-gray-100">
-    <!-- Nav -->
-    <nav class="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-50">
-      <div class="max-w-[1800px] mx-auto px-4 h-14 flex items-center gap-6">
-        <NuxtLink to="/" class="text-lg font-bold text-vargen-400 tracking-tight">vargen</NuxtLink>
-        <div class="flex gap-1">
-          <NuxtLink
-            v-for="link in links"
-            :key="link.to"
-            :to="link.to"
-            class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-            :class="$route.path === link.to
-              ? 'bg-gray-800 text-white'
-              : 'text-gray-400 hover:text-white hover:bg-gray-800/50'"
-          >
-            {{ link.label }}
-          </NuxtLink>
-        </div>
-        <div class="ml-auto flex items-center gap-3">
-          <VramBadge />
-        </div>
+  <div class="h-screen flex flex-col overflow-hidden" style="background: var(--bg-primary)">
+    <!-- Title bar -->
+    <div class="h-9 flex items-center px-3 shrink-0" style="background: var(--bg-secondary); border-bottom: 1px solid var(--border)">
+      <span class="text-[13px] font-semibold tracking-tight" style="color: var(--accent)">vargen</span>
+      <div class="flex items-center gap-0.5 ml-6">
+        <NuxtLink
+          v-for="tab in tabs"
+          :key="tab.to"
+          :to="tab.to"
+          class="px-2.5 py-1 text-[12px] rounded transition-colors"
+          :style="$route.path === tab.to
+            ? 'background: var(--bg-active); color: var(--text-primary)'
+            : 'color: var(--text-secondary)'"
+          @mouseenter="($event.target as HTMLElement).style.color = 'var(--text-primary)'"
+          @mouseleave="($event.target as HTMLElement).style.color = $route.path === tab.to ? 'var(--text-primary)' : 'var(--text-secondary)'"
+        >
+          {{ tab.label }}
+        </NuxtLink>
       </div>
-    </nav>
+      <div class="ml-auto flex items-center gap-3">
+        <VramBadge />
+      </div>
+    </div>
 
     <!-- Content -->
-    <main class="max-w-[1800px] mx-auto px-4 py-6">
+    <div class="flex-1 overflow-hidden">
       <slot />
-    </main>
+    </div>
+
+    <!-- Status bar -->
+    <div class="h-6 flex items-center px-3 shrink-0 text-[11px]" style="background: var(--accent); color: #000">
+      <span class="font-medium">vargen</span>
+      <span class="ml-3 opacity-60">v0.1.0</span>
+      <span class="ml-auto mono opacity-60" v-if="status">{{ status }}</span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-const links = [
+const tabs = [
   { to: '/', label: 'Generate' },
   { to: '/editor', label: 'Pipelines' },
-  { to: '/flow', label: 'Flow Editor' },
+  { to: '/flow', label: 'Flow' },
   { to: '/gallery', label: 'Gallery' },
   { to: '/models', label: 'Models' },
 ]
+
+const status = ref('Ready')
 </script>

@@ -1,81 +1,66 @@
 <template>
-  <div class="grid grid-cols-12 gap-6">
-    <!-- Sidebar -->
-    <div class="col-span-3 space-y-3">
-      <h2 class="text-lg font-semibold">Pipelines</h2>
-      <div
-        v-for="p in pipelines"
-        :key="p.id"
-        @click="loadPipeline(p.id)"
-        class="p-3 rounded-lg border cursor-pointer transition-all"
-        :class="activePipeline === p.id
-          ? 'border-vargen-500 bg-vargen-950/20'
-          : 'border-gray-800 hover:border-gray-600'"
-      >
-        <p class="text-sm font-medium">{{ p.name }}</p>
-        <p class="text-xs text-gray-500 mt-0.5">{{ p.steps }} steps</p>
-        <div v-if="p.tags?.length" class="flex gap-1 mt-1.5 flex-wrap">
-          <span v-for="tag in p.tags" :key="tag" class="px-1.5 py-0.5 text-[10px] rounded bg-gray-800 text-gray-400">
-            {{ tag }}
-          </span>
+  <div class="h-full flex">
+    <!-- Sidebar: pipeline list -->
+    <div class="w-56 shrink-0 overflow-y-auto" style="border-right: 1px solid var(--border)">
+      <div class="p-2 space-y-0.5">
+        <div
+          v-for="p in pipelines"
+          :key="p.id"
+          @click="loadPipeline(p.id)"
+          class="px-2 py-1.5 rounded cursor-pointer text-[12px] transition-colors"
+          :style="activePipeline === p.id
+            ? 'background: var(--bg-active); color: var(--text-primary)'
+            : 'color: var(--text-secondary)'"
+        >
+          {{ p.name }}
         </div>
       </div>
-      <button
-        @click="createNew"
-        class="w-full py-2 rounded-lg border border-dashed border-gray-700 text-sm text-gray-500 hover:text-white hover:border-gray-500 transition-colors"
-      >
-        + New Pipeline
-      </button>
+      <div class="p-2 pt-0">
+        <button @click="createNew" class="btn btn-ghost w-full text-[11px]">+ New</button>
+      </div>
     </div>
 
     <!-- Editor -->
-    <div class="col-span-9 space-y-4">
-      <div class="flex items-center gap-3">
+    <div class="flex-1 flex flex-col overflow-hidden">
+      <!-- Toolbar -->
+      <div class="h-9 flex items-center gap-2 px-3 shrink-0" style="border-bottom: 1px solid var(--border)">
         <input
           v-model="pipelineName"
-          class="text-lg font-semibold bg-transparent border-b border-transparent hover:border-gray-700 focus:border-vargen-500 outline-none px-1 py-0.5"
-          placeholder="Pipeline name"
+          class="mono text-[12px] px-1.5 py-0.5 w-48"
+          style="background: transparent !important; border: none !important"
+          placeholder="filename"
         />
-        <div class="ml-auto flex gap-2">
-          <button
-            @click="checkPipelineModels"
-            class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 hover:bg-gray-700 transition-colors"
-          >
-            Check Models
-          </button>
-          <button
-            @click="saveCurrent"
-            class="px-3 py-1.5 text-xs rounded-lg bg-vargen-600 hover:bg-vargen-500 text-white transition-colors"
-          >
-            Save
-          </button>
+        <div class="ml-auto flex gap-1.5">
+          <button @click="checkModels" class="btn btn-ghost text-[11px]">Check Models</button>
+          <button @click="saveCurrent" class="btn btn-primary text-[11px]">Save</button>
         </div>
       </div>
 
-      <!-- YAML Editor -->
-      <div class="relative">
+      <div class="flex-1 flex overflow-hidden">
+        <!-- YAML -->
         <textarea
           v-model="yamlContent"
-          class="w-full h-[600px] bg-gray-900 border border-gray-800 rounded-xl p-4 font-mono text-sm text-gray-200 resize-none focus:ring-1 focus:ring-vargen-500 focus:border-vargen-500 outline-none"
+          class="flex-1 p-4 mono text-[12px] leading-relaxed resize-none outline-none"
+          style="background: var(--bg-primary) !important; border: none !important; color: var(--text-primary)"
           spellcheck="false"
         />
-      </div>
 
-      <!-- Model check results -->
-      <div v-if="modelCheck.length" class="space-y-1">
-        <div
-          v-for="m in modelCheck"
-          :key="m.name"
-          class="flex items-center gap-2 p-2 rounded-lg bg-gray-900/50 text-sm"
-        >
-          <div class="w-2 h-2 rounded-full" :class="m.cached ? 'bg-green-500' : 'bg-yellow-500'" />
-          <span class="font-medium">{{ m.name }}</span>
-          <span class="text-gray-500">{{ m.repo }}{{ m.file ? '/' + m.file : '' }}</span>
-          <span v-if="m.vram_mb" class="text-xs text-gray-600 ml-auto">{{ m.vram_mb }}MB</span>
+        <!-- Model status sidebar -->
+        <div v-if="modelCheck.length" class="w-64 shrink-0 overflow-y-auto p-3 space-y-1" style="border-left: 1px solid var(--border)">
+          <p class="text-[11px] uppercase tracking-wider mb-2" style="color: var(--text-muted)">Models</p>
+          <div
+            v-for="m in modelCheck"
+            :key="m.name"
+            class="flex items-center gap-2 py-1 text-[11px]"
+          >
+            <div class="w-1.5 h-1.5 rounded-full" :style="{ background: m.cached ? 'var(--success)' : 'var(--warning)' }" />
+            <span style="color: var(--text-primary)">{{ m.name }}</span>
+            <span v-if="m.vram_mb" class="ml-auto mono" style="color: var(--text-muted)">{{ m.vram_mb }}MB</span>
+          </div>
         </div>
       </div>
 
-      <p v-if="saveStatus" class="text-sm" :class="saveStatus.startsWith('Error') ? 'text-red-400' : 'text-green-400'">
+      <p v-if="saveStatus" class="px-3 py-1 text-[11px]" :style="{ color: saveStatus.startsWith('Error') ? 'var(--error)' : 'var(--success)' }">
         {{ saveStatus }}
       </p>
     </div>
@@ -92,7 +77,7 @@ const modelCheck = ref<any[]>([])
 const saveStatus = ref('')
 
 onMounted(async () => {
-  pipelines.value = await api.listPipelines()
+  try { pipelines.value = await api.listPipelines() } catch {}
 })
 
 async function loadPipeline(id: string) {
@@ -101,14 +86,13 @@ async function loadPipeline(id: string) {
   yamlContent.value = data.yaml
   pipelineName.value = id
   modelCheck.value = []
-  saveStatus.value = ''
 }
 
 async function saveCurrent() {
-  if (!pipelineName.value || !yamlContent.value) return
+  if (!pipelineName.value) return
   try {
     await api.savePipeline(pipelineName.value, yamlContent.value)
-    saveStatus.value = 'Saved!'
+    saveStatus.value = 'Saved'
     pipelines.value = await api.listPipelines()
     setTimeout(() => saveStatus.value = '', 2000)
   } catch (e: any) {
@@ -116,14 +100,8 @@ async function saveCurrent() {
   }
 }
 
-async function checkPipelineModels() {
-  if (!yamlContent.value) return
-  try {
-    modelCheck.value = await api.checkModels(yamlContent.value)
-  } catch (e: any) {
-    modelCheck.value = []
-    saveStatus.value = `Error: ${e.message}`
-  }
+async function checkModels() {
+  try { modelCheck.value = await api.checkModels(yamlContent.value) } catch {}
 }
 
 function createNew() {
@@ -132,7 +110,6 @@ function createNew() {
   yamlContent.value = `name: "New Pipeline"
 description: ""
 version: 1
-tags: []
 
 models:
   flux-dev:
@@ -145,13 +122,11 @@ steps:
   - name: generate
     type: txt2img
     model: flux-dev
-    prompt: "your prompt here"
+    prompt: ""
     width: 1024
     height: 1024
     steps: 20
     guidance: 3.5
-    seed: -1
 `
-  modelCheck.value = []
 }
 </script>

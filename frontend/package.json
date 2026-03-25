@@ -4,8 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "nuxt dev --port 3000",
-    "build": "nuxt build",
-    "generate": "nuxt generate",
+    "build": "nuxt generate",
     "preview": "nuxt preview"
   },
   "dependencies": {
@@ -18,7 +17,6 @@
   },
   "devDependencies": {
     "@nuxtjs/tailwindcss": "^6.12.0",
-    "@nuxtjs/color-mode": "^3.5.0",
     "typescript": "^5.5.0"
   }
 }

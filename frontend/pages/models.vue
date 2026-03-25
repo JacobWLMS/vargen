@@ -1,33 +1,38 @@
 <template>
-  <div>
-    <div class="flex items-center gap-3 mb-6">
-      <h2 class="text-lg font-semibold">Models</h2>
-      <button @click="refresh" class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 hover:bg-gray-700">Refresh</button>
+  <div class="h-full flex flex-col">
+    <div class="h-9 flex items-center px-3 shrink-0" style="border-bottom: 1px solid var(--border)">
+      <span class="text-[12px]" style="color: var(--text-secondary)">System</span>
+      <button @click="refresh" class="btn btn-ghost text-[11px] ml-auto">Refresh</button>
     </div>
 
-    <div v-if="status" class="grid grid-cols-3 gap-4 mb-8">
-      <div class="p-4 rounded-xl bg-gray-900 border border-gray-800">
-        <p class="text-xs text-gray-500 mb-1">VRAM Total</p>
-        <p class="text-2xl font-bold">{{ status.vram_total_mb }}MB</p>
+    <div class="flex-1 overflow-y-auto p-4 space-y-4">
+      <div v-if="status" class="flex gap-3">
+        <div class="panel flex-1 p-3">
+          <p class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted)">VRAM Total</p>
+          <p class="text-2xl font-light mono mt-1">{{ status.vram_total_mb }}<span class="text-[12px]" style="color: var(--text-muted)">MB</span></p>
+        </div>
+        <div class="panel flex-1 p-3">
+          <p class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted)">VRAM Free</p>
+          <p class="text-2xl font-light mono mt-1" :style="{ color: vramColor }">{{ status.vram_free_mb }}<span class="text-[12px]" style="color: var(--text-muted)">MB</span></p>
+        </div>
+        <div class="panel flex-1 p-3">
+          <p class="text-[11px] uppercase tracking-wider" style="color: var(--text-muted)">Loaded</p>
+          <p class="text-2xl font-light mono mt-1">{{ status.loaded_models?.length || 0 }}</p>
+        </div>
       </div>
-      <div class="p-4 rounded-xl bg-gray-900 border border-gray-800">
-        <p class="text-xs text-gray-500 mb-1">VRAM Free</p>
-        <p class="text-2xl font-bold" :class="vramFreeColor">{{ status.vram_free_mb }}MB</p>
-      </div>
-      <div class="p-4 rounded-xl bg-gray-900 border border-gray-800">
-        <p class="text-xs text-gray-500 mb-1">Loaded Models</p>
-        <p class="text-2xl font-bold">{{ status.loaded_models?.length || 0 }}</p>
-      </div>
-    </div>
 
-    <div v-if="status?.cache_dir" class="mb-6">
-      <p class="text-sm text-gray-500">Cache: <code class="text-gray-400">{{ status.cache_dir }}</code></p>
-    </div>
+      <div v-if="status?.cache_dir" class="panel p-3">
+        <p class="text-[11px] uppercase tracking-wider mb-1" style="color: var(--text-muted)">Cache Directory</p>
+        <p class="mono text-[12px]" style="color: var(--text-secondary)">{{ status.cache_dir }}</p>
+      </div>
 
-    <div v-if="status?.loaded_models?.length" class="space-y-2">
-      <h3 class="text-sm font-medium text-gray-400">Currently Loaded</h3>
-      <div v-for="m in status.loaded_models" :key="m" class="p-3 rounded-lg bg-gray-900 border border-gray-800 text-sm">
-        {{ m }}
+      <div v-if="status?.loaded_models?.length" class="panel">
+        <div class="panel-header">Loaded Models</div>
+        <div class="p-1">
+          <div v-for="m in status.loaded_models" :key="m" class="px-3 py-1.5 text-[12px] mono" style="color: var(--text-secondary)">
+            {{ m }}
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -37,17 +42,16 @@
 const api = useApi()
 const status = ref<any>(null)
 
-const vramFreeColor = computed(() => {
-  if (!status.value) return ''
+const vramColor = computed(() => {
+  if (!status.value) return 'var(--text-primary)'
   const pct = status.value.vram_free_mb / status.value.vram_total_mb
-  if (pct > 0.5) return 'text-green-400'
-  if (pct > 0.2) return 'text-yellow-400'
-  return 'text-red-400'
+  if (pct > 0.5) return 'var(--success)'
+  if (pct > 0.2) return 'var(--warning)'
+  return 'var(--error)'
 })
 
 async function refresh() {
-  status.value = await api.getModelStatus()
+  try { status.value = await api.getModelStatus() } catch {}
 }
-
 onMounted(refresh)
 </script>

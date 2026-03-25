@@ -1,29 +1,29 @@
 <template>
-  <div>
-    <div class="flex items-center gap-3 mb-6">
-      <h2 class="text-lg font-semibold">Gallery</h2>
-      <button @click="refresh" class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 hover:bg-gray-700">Refresh</button>
-      <span class="text-sm text-gray-500 ml-auto">{{ outputs.length }} images</span>
+  <div class="h-full flex flex-col">
+    <div class="h-9 flex items-center px-3 shrink-0" style="border-bottom: 1px solid var(--border)">
+      <span class="text-[12px]" style="color: var(--text-secondary)">{{ outputs.length }} images</span>
+      <button @click="refresh" class="btn btn-ghost text-[11px] ml-auto">Refresh</button>
     </div>
 
-    <div v-if="outputs.length" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-      <div
-        v-for="img in outputs"
-        :key="img.filename"
-        @click="selected = img"
-        class="group cursor-pointer"
-      >
-        <img
-          :src="api.outputUrl(img.filename)"
-          class="w-full aspect-square object-cover rounded-lg border border-gray-800 group-hover:border-vargen-500 transition-colors"
-          loading="lazy"
-        />
-        <p class="text-[10px] text-gray-600 mt-1 truncate">{{ img.filename }}</p>
+    <div class="flex-1 overflow-y-auto p-3">
+      <div v-if="outputs.length" class="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-8 gap-1.5">
+        <div
+          v-for="img in outputs"
+          :key="img.filename"
+          @click="selected = img"
+          class="cursor-pointer group"
+        >
+          <img
+            :src="api.outputUrl(img.filename)"
+            class="w-full aspect-square object-cover rounded transition-opacity group-hover:opacity-80"
+            style="border: 1px solid var(--border)"
+            loading="lazy"
+          />
+        </div>
       </div>
-    </div>
-    <div v-else class="text-center py-20 text-gray-600">
-      <p>No generated images yet</p>
-      <p class="text-sm mt-1">Run a pipeline to see results here</p>
+      <div v-else class="h-full flex items-center justify-center">
+        <p class="text-[12px]" style="color: var(--text-muted)">No outputs yet</p>
+      </div>
     </div>
 
     <!-- Lightbox -->
@@ -31,12 +31,17 @@
       <div
         v-if="selected"
         @click.self="selected = null"
-        class="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-8"
+        class="fixed inset-0 z-50 flex items-center justify-center p-8"
+        style="background: rgba(0,0,0,0.95)"
       >
-        <button @click="selected = null" class="absolute top-4 right-4 text-gray-400 hover:text-white text-2xl">&times;</button>
+        <button
+          @click="selected = null"
+          class="absolute top-4 right-4 text-[20px]"
+          style="color: var(--text-muted)"
+        >&times;</button>
         <img
           :src="api.outputUrl(selected.filename)"
-          class="max-h-[90vh] max-w-[90vw] rounded-xl shadow-2xl"
+          class="max-h-[90vh] max-w-[90vw] rounded"
         />
       </div>
     </Teleport>
@@ -49,7 +54,7 @@ const outputs = ref<any[]>([])
 const selected = ref<any>(null)
 
 async function refresh() {
-  outputs.value = await api.listOutputs()
+  try { outputs.value = await api.listOutputs() } catch {}
 }
 
 onMounted(refresh)

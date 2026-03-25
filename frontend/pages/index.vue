@@ -1,98 +1,92 @@
 <template>
-  <div class="grid grid-cols-12 gap-6">
-    <!-- Left: Input + Controls -->
-    <div class="col-span-4 space-y-4">
-      <!-- Image Upload -->
-      <div
-        class="border-2 border-dashed border-gray-700 rounded-xl p-4 text-center cursor-pointer hover:border-vargen-500 transition-colors"
-        :class="{ 'border-vargen-500 bg-vargen-950/20': uploadedImage }"
-        @click="$refs.fileInput.click()"
-        @drop.prevent="onDrop"
-        @dragover.prevent
-      >
-        <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFileSelect" />
-        <img v-if="previewUrl" :src="previewUrl" class="max-h-64 mx-auto rounded-lg" />
-        <div v-else class="py-12 text-gray-500">
-          <p class="text-lg font-medium">Drop image here</p>
-          <p class="text-sm mt-1">or click to browse</p>
+  <div class="h-full flex">
+    <!-- Sidebar: controls -->
+    <div class="w-72 shrink-0 overflow-y-auto p-3 space-y-3" style="border-right: 1px solid var(--border)">
+
+      <!-- Image input -->
+      <div class="panel">
+        <div class="panel-header">Reference Image</div>
+        <div
+          class="p-2 cursor-pointer"
+          @click="($refs.fileInput as HTMLInputElement).click()"
+          @drop.prevent="onDrop"
+          @dragover.prevent
+        >
+          <input ref="fileInput" type="file" accept="image/*" class="hidden" @change="onFileSelect" />
+          <img v-if="previewUrl" :src="previewUrl" class="w-full rounded" />
+          <div v-else class="py-8 text-center text-[12px]" style="color: var(--text-muted)">
+            Drop image or click
+          </div>
         </div>
       </div>
 
-      <!-- Pipeline Selection -->
-      <div>
-        <label class="block text-sm font-medium text-gray-400 mb-1">Pipeline</label>
-        <select
-          v-model="selectedPipeline"
-          class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2.5 text-sm focus:ring-vargen-500 focus:border-vargen-500"
-        >
-          <option v-for="p in pipelines" :key="p.id" :value="p.id">
-            {{ p.name }}
-          </option>
-        </select>
-        <p v-if="pipelineInfo" class="text-xs text-gray-500 mt-1">
-          {{ pipelineInfo.description }} — {{ pipelineInfo.steps }} steps
-        </p>
+      <!-- Pipeline -->
+      <div class="panel">
+        <div class="panel-header">Pipeline</div>
+        <div class="p-2">
+          <select v-model="selectedPipeline" class="w-full px-2 py-1.5 text-[12px]">
+            <option v-for="p in pipelines" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+          <p v-if="pipelineInfo" class="text-[11px] mt-1.5 px-0.5" style="color: var(--text-muted)">
+            {{ pipelineInfo.steps }} steps · {{ pipelineInfo.tags?.join(', ') }}
+          </p>
+        </div>
       </div>
 
-      <!-- Run Button -->
+      <!-- Run -->
       <button
         @click="runGeneration"
         :disabled="running || !uploadedImage"
-        class="w-full py-3 rounded-xl font-semibold text-sm transition-all"
-        :class="running
-          ? 'bg-gray-800 text-gray-500 cursor-wait'
-          : 'bg-vargen-600 hover:bg-vargen-500 text-white shadow-lg shadow-vargen-600/20'"
+        class="btn btn-primary w-full py-2"
       >
-        {{ running ? 'Generating...' : 'Generate' }}
+        {{ running ? 'Running...' : 'Generate' }}
       </button>
 
-      <!-- Progress -->
-      <div v-if="steps.length" class="space-y-2">
-        <div
-          v-for="step in steps"
-          :key="step.name"
-          class="flex items-center gap-3 p-3 rounded-lg bg-gray-900/50 border border-gray-800"
-        >
-          <div class="w-2 h-2 rounded-full shrink-0" :class="stepColor(step)" />
-          <div class="min-w-0 flex-1">
-            <p class="text-sm font-medium truncate">{{ step.name }}</p>
-            <p v-if="step.status === 'done'" class="text-xs text-gray-500">{{ step.duration?.toFixed(1) }}s</p>
-            <p v-if="step.status === 'running' && step.batchProgress" class="text-xs text-vargen-400">
-              Batch {{ step.batchProgress.index + 1 }}/{{ step.batchProgress.total }}
-            </p>
+      <!-- Steps progress -->
+      <div v-if="steps.length" class="panel">
+        <div class="panel-header">Progress</div>
+        <div class="p-1">
+          <div
+            v-for="step in steps"
+            :key="step.name"
+            class="flex items-center gap-2 px-2 py-1.5 text-[12px]"
+          >
+            <div class="w-1.5 h-1.5 rounded-full shrink-0" :style="{ background: stepColor(step) }" />
+            <span class="flex-1 truncate">{{ step.name }}</span>
+            <span v-if="step.duration" class="mono" style="color: var(--text-muted)">{{ step.duration.toFixed(1) }}s</span>
+            <div v-if="step.status === 'running'" class="w-3 h-3 border border-t-transparent rounded-full animate-spin" style="border-color: var(--accent); border-top-color: transparent" />
           </div>
-          <div v-if="step.status === 'running'" class="w-4 h-4 border-2 border-vargen-400 border-t-transparent rounded-full animate-spin" />
         </div>
+      </div>
+
+      <!-- Caption -->
+      <div v-if="captionText" class="panel">
+        <div class="panel-header">Caption</div>
+        <p class="p-2 text-[11px] leading-relaxed" style="color: var(--text-secondary)">{{ captionText }}</p>
       </div>
     </div>
 
-    <!-- Right: Output -->
-    <div class="col-span-8">
-      <div v-if="outputImages.length" class="space-y-4">
-        <!-- Main result -->
+    <!-- Main: output -->
+    <div class="flex-1 overflow-y-auto p-4 flex flex-col items-center justify-center" style="background: var(--bg-primary)">
+      <template v-if="outputImages.length">
         <img
-          :src="outputImages[outputImages.length - 1]"
-          class="w-full rounded-xl border border-gray-800 shadow-2xl"
+          :src="outputImages[selectedOutput]"
+          class="max-h-[calc(100vh-12rem)] rounded shadow-2xl"
         />
-        <!-- Thumbnails -->
-        <div v-if="outputImages.length > 1" class="flex gap-2 flex-wrap">
+        <div v-if="outputImages.length > 1" class="flex gap-1.5 mt-3 flex-wrap justify-center">
           <img
             v-for="(url, i) in outputImages"
             :key="i"
             :src="url"
-            class="w-24 h-24 object-cover rounded-lg border border-gray-800 cursor-pointer hover:border-vargen-500 transition-colors"
             @click="selectedOutput = i"
+            class="w-14 h-14 object-cover rounded cursor-pointer transition-opacity"
+            :style="{ opacity: i === selectedOutput ? 1 : 0.4, border: i === selectedOutput ? '1px solid var(--accent)' : '1px solid var(--border)' }"
           />
         </div>
-      </div>
-      <div v-else class="h-96 flex items-center justify-center border border-gray-800 rounded-xl bg-gray-900/30">
-        <p class="text-gray-600">Output will appear here</p>
-      </div>
-
-      <!-- Caption preview -->
-      <div v-if="captionText" class="mt-4 p-4 rounded-lg bg-gray-900/50 border border-gray-800">
-        <p class="text-xs font-medium text-gray-500 mb-1">Caption</p>
-        <p class="text-sm text-gray-300">{{ captionText }}</p>
+      </template>
+      <div v-else class="text-center" style="color: var(--text-muted)">
+        <p class="text-[13px]">No output yet</p>
+        <p class="text-[11px] mt-1">Upload an image and run a pipeline</p>
       </div>
     </div>
   </div>
@@ -114,8 +108,10 @@ const steps = ref<any[]>([])
 const pipelineInfo = computed(() => pipelines.value.find(p => p.id === selectedPipeline.value))
 
 onMounted(async () => {
-  pipelines.value = await api.listPipelines()
-  if (pipelines.value.length) selectedPipeline.value = pipelines.value[0].id
+  try {
+    pipelines.value = await api.listPipelines()
+    if (pipelines.value.length) selectedPipeline.value = pipelines.value[0].id
+  } catch {}
 })
 
 function onFileSelect(e: Event) {
@@ -135,9 +131,9 @@ async function handleFile(file: File) {
 }
 
 function stepColor(step: any) {
-  if (step.status === 'done') return 'bg-green-500'
-  if (step.status === 'running') return 'bg-vargen-400 animate-pulse'
-  return 'bg-gray-600'
+  if (step.status === 'done') return 'var(--success)'
+  if (step.status === 'running') return 'var(--accent)'
+  return 'var(--text-muted)'
 }
 
 function runGeneration() {
@@ -146,43 +142,25 @@ function runGeneration() {
   outputImages.value = []
   captionText.value = ''
   steps.value = []
+  selectedOutput.value = 0
 
-  api.runPipelineWs(
-    selectedPipeline.value,
-    uploadedImage.value,
-    undefined,
-    {
-      onStepStart(data) {
-        steps.value.push({ name: data.step, status: 'running' })
-      },
-      onStepDone(data) {
-        const step = steps.value.find(s => s.name === data.step)
-        if (step) {
-          step.status = 'done'
-          step.duration = data.duration
-        }
-        if (data.url) {
-          outputImages.value.push(`${api.base}${data.url}`)
-        }
-        if (data.urls) {
-          data.urls.forEach((url: string) => outputImages.value.push(`${api.base}${url}`))
-        }
-        if (data.text) {
-          captionText.value = data.text
-        }
-      },
-      onBatchProgress(data) {
-        const step = steps.value.find(s => s.name === data.step)
-        if (step) step.batchProgress = data
-      },
-      onComplete() {
-        running.value = false
-      },
-      onError(msg) {
-        running.value = false
-        alert(`Error: ${msg}`)
-      },
+  api.runPipelineWs(selectedPipeline.value, uploadedImage.value, undefined, {
+    onStepStart(data) {
+      steps.value.push({ name: data.step, status: 'running' })
     },
-  )
+    onStepDone(data) {
+      const step = steps.value.find(s => s.name === data.step)
+      if (step) { step.status = 'done'; step.duration = data.duration }
+      if (data.url) outputImages.value.push(`${api.base}${data.url}`)
+      if (data.urls) data.urls.forEach((u: string) => outputImages.value.push(`${api.base}${u}`))
+      if (data.text) captionText.value = data.text
+    },
+    onBatchProgress(data) {
+      const step = steps.value.find(s => s.name === data.step)
+      if (step) step.batch = `${data.index + 1}/${data.total}`
+    },
+    onComplete() { running.value = false },
+    onError(msg) { running.value = false; alert(msg) },
+  })
 }
 </script>
