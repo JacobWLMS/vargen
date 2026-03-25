@@ -57,10 +57,13 @@ def exec_load_checkpoint(inputs, widgets, ctx):
         pipe = _load_sd_checkpoint(model_path, torch_dtype)
         arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
 
-    # GGUF models need sequential offload — they're too large for model_cpu_offload
-    if is_gguf and offload_mode == "auto":
-        offload_mode = "sequential_cpu"
-        log.info("GGUF model: forcing sequential CPU offload")
+    # GGUF/FLUX on low VRAM needs aggressive offloading
+    if (is_gguf or is_flux) and offload_mode == "auto":
+        if torch.cuda.is_available():
+            free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+            if free_mb < 10000:
+                offload_mode = "model_cpu"
+                log.info(f"FLUX/GGUF on {free_mb}MB VRAM: using model CPU offload")
 
     _setup_vram_offload(pipe, offload_mode)
 
@@ -106,9 +109,32 @@ def _load_flux_checkpoint(model_path, is_gguf, torch_dtype):
         transformer = FluxTransformer2DModel.from_single_file(
             str(model_path), quantization_config=gguf_config, torch_dtype=torch_dtype,
         )
-        log.info("Loading FLUX pipeline components (cached after first download)...")
+        # Try to use local fp8 text encoders to save VRAM
+        from transformers import T5EncoderModel, CLIPTextModel
+
+        extra_kwargs = {}
+        if model_manager:
+            t5_path = (model_manager.find_model("text_encoders", "t5xxl_fp8_e4m3fn.safetensors")
+                       or model_manager.find_model("text_encoders", "t5xxl_fp16.safetensors"))
+            if t5_path:
+                log.info(f"Using local T5 encoder: {t5_path.name}")
+                try:
+                    from diffusers import BitsAndBytesConfig
+                    if "fp8" in t5_path.name:
+                        quant_config = BitsAndBytesConfig(load_in_8bit=True)
+                        text_encoder_2 = T5EncoderModel.from_pretrained(
+                            "black-forest-labs/FLUX.1-dev", subfolder="text_encoder_2",
+                            quantization_config=quant_config, torch_dtype=torch_dtype,
+                        )
+                        extra_kwargs["text_encoder_2"] = text_encoder_2
+                        log.info("T5 loaded in 8-bit (saves ~2.5GB VRAM)")
+                except Exception as e:
+                    log.warning(f"Local T5 load failed: {e}, using default")
+
+        log.info("Loading FLUX pipeline components...")
         pipe = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev", transformer=transformer, torch_dtype=torch_dtype,
+            **extra_kwargs,
         )
     elif model_path.is_file():
         pipe = FluxPipeline.from_single_file(str(model_path), torch_dtype=torch_dtype)
