@@ -1,4 +1,4 @@
-"""Conditioning nodes — CLIP text encode, set areas, combine."""
+"""Conditioning nodes — CLIP text encode using actual diffusers components."""
 
 import torch
 import logging
@@ -9,40 +9,54 @@ log = logging.getLogger(__name__)
 
 
 def exec_clip_text_encode(inputs, widgets, ctx):
-    pipe = inputs.get("_pipe")
-    if not pipe:
-        raise ValueError("CLIP Text Encode needs a pipeline (connect Load Checkpoint)")
+    clip = inputs.get("CLIP")
+    if not clip:
+        raise ValueError("CLIP Text Encode needs a CLIP input — connect from Load Checkpoint")
 
     text = widgets.get("text", "")
-    log.info(f"Encoding text: {text[:80]}...")
+    log.info(f"Encoding: {text[:80]}...")
 
-    # Determine device
-    device = "cpu"
-    if hasattr(pipe, '_execution_device'):
-        device = pipe._execution_device
-    elif hasattr(pipe, 'device'):
-        device = pipe.device
+    pipe = inputs.get("_pipe")
+    arch = clip.get("arch", "sdxl")
 
-    # Use the pipeline's text encoder
-    if hasattr(pipe, 'encode_prompt'):
-        # SDXL — use encode_prompt which handles device internally
-        prompt_embeds, negative_prompt_embeds, pooled, neg_pooled = pipe.encode_prompt(
-            prompt=text, device=device, num_images_per_prompt=1, do_classifier_free_guidance=False
+    if arch == "sdxl" and pipe and hasattr(pipe, 'encode_prompt'):
+        # SDXL: use pipeline's encode_prompt for proper dual-encoder handling
+        device = pipe._execution_device if hasattr(pipe, '_execution_device') else 'cpu'
+        prompt_embeds, _, pooled_prompt_embeds, _ = pipe.encode_prompt(
+            prompt=text,
+            device=device,
+            num_images_per_prompt=1,
+            do_classifier_free_guidance=False,
         )
-        return {"CONDITIONING": {"embeds": prompt_embeds, "pooled": pooled, "text": text}}
+        return {
+            "CONDITIONING": {
+                "prompt_embeds": prompt_embeds,
+                "pooled_prompt_embeds": pooled_prompt_embeds,
+                "text": text,
+                "arch": arch,
+            }
+        }
     else:
-        # SD1.5
-        text_inputs = pipe.tokenizer(text, padding="max_length", max_length=77,
-                                      truncation=True, return_tensors="pt")
-        text_embeds = pipe.text_encoder(text_inputs.input_ids.to(device))[0]
-        return {"CONDITIONING": {"embeds": text_embeds, "text": text}}
+        # SD1.5 or fallback
+        tokenizer = clip.get("tokenizer")
+        text_encoder = clip.get("text_encoder")
+        if not tokenizer or not text_encoder:
+            # Fallback: just pass text through
+            return {"CONDITIONING": {"text": text, "arch": arch}}
 
+        device = next(text_encoder.parameters()).device
+        text_inputs = tokenizer(text, padding="max_length", max_length=77,
+                                truncation=True, return_tensors="pt")
+        with torch.no_grad():
+            text_embeds = text_encoder(text_inputs.input_ids.to(device))[0]
 
-def exec_clip_set_last_layer(inputs, widgets, ctx):
-    clip = inputs.get("CLIP")
-    stop_at = widgets.get("stop_at_clip_layer", -1)
-    # Store clip skip setting for use during encoding
-    return {"CLIP": clip, "_clip_skip": stop_at}
+        return {
+            "CONDITIONING": {
+                "prompt_embeds": text_embeds,
+                "text": text,
+                "arch": arch,
+            }
+        }
 
 
 def exec_conditioning_combine(inputs, widgets, ctx):
@@ -50,59 +64,34 @@ def exec_conditioning_combine(inputs, widgets, ctx):
     cond2 = inputs.get("CONDITIONING_2")
     if not cond1 or not cond2:
         raise ValueError("Need both conditioning inputs")
-    # Simple concatenation
-    combined = {
-        "embeds": torch.cat([cond1["embeds"], cond2["embeds"]], dim=1),
+
+    embeds1 = cond1.get("prompt_embeds")
+    embeds2 = cond2.get("prompt_embeds")
+    if embeds1 is not None and embeds2 is not None:
+        combined_embeds = torch.cat([embeds1, embeds2], dim=1)
+    else:
+        combined_embeds = embeds1 or embeds2
+
+    return {"CONDITIONING": {
+        "prompt_embeds": combined_embeds,
         "text": f"{cond1.get('text', '')} + {cond2.get('text', '')}",
-    }
-    return {"CONDITIONING": combined}
+        "arch": cond1.get("arch", "sdxl"),
+    }}
 
-
-# ── Register ──────────────────────────────────
 
 register_node(NodeTypeDef(
-    type_id="clip_text_encode",
-    category="conditioning",
-    label="CLIP Text Encode",
-    inputs=[
-        PortDef("CLIP", "CLIP"),
-    ],
-    outputs=[
-        PortDef("CONDITIONING", "CONDITIONING"),
-    ],
-    widgets=[
-        WidgetDef("text", "textarea", default="", label="Text"),
-    ],
-    execute=exec_clip_text_encode,
-    color="#eab308",
-    description="Encode text prompt using CLIP",
-))
-
-register_node(NodeTypeDef(
-    type_id="clip_set_last_layer",
-    category="conditioning",
-    label="CLIP Set Last Layer",
+    type_id="clip_text_encode", category="conditioning", label="CLIP Text Encode",
     inputs=[PortDef("CLIP", "CLIP")],
-    outputs=[PortDef("CLIP", "CLIP")],
-    widgets=[
-        WidgetDef("stop_at_clip_layer", "number", default=-1, min=-24, max=-1, step=1, label="Stop at Layer"),
-    ],
-    execute=exec_clip_set_last_layer,
-    color="#eab308",
-    description="Set CLIP skip (which layer to stop at)",
+    outputs=[PortDef("CONDITIONING", "CONDITIONING")],
+    widgets=[WidgetDef("text", "textarea", default="", label="Text")],
+    execute=exec_clip_text_encode, color="#ffd500",
+    description="Encode text using CLIP text encoder",
 ))
 
 register_node(NodeTypeDef(
-    type_id="conditioning_combine",
-    category="conditioning",
-    label="Conditioning Combine",
-    inputs=[
-        PortDef("CONDITIONING_1", "CONDITIONING"),
-        PortDef("CONDITIONING_2", "CONDITIONING"),
-    ],
+    type_id="conditioning_combine", category="conditioning", label="Conditioning Combine",
+    inputs=[PortDef("CONDITIONING_1", "CONDITIONING"), PortDef("CONDITIONING_2", "CONDITIONING")],
     outputs=[PortDef("CONDITIONING", "CONDITIONING")],
     widgets=[],
-    execute=exec_conditioning_combine,
-    color="#eab308",
-    description="Combine two conditioning inputs",
+    execute=exec_conditioning_combine, color="#ffa040",
 ))

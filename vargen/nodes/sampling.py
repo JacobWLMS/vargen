@@ -1,4 +1,4 @@
-"""Sampling nodes — KSampler and variants."""
+"""Sampling nodes — KSampler using actual diffusers pipeline with pre-encoded conditioning."""
 
 import torch
 import logging
@@ -8,91 +8,98 @@ from . import register_node, NodeTypeDef, PortDef, WidgetDef
 log = logging.getLogger(__name__)
 
 SAMPLERS = [
-    "euler", "euler_ancestral", "heun", "heunpp2", "dpm_2", "dpm_2_ancestral",
-    "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde",
-    "dpmpp_sde_gpu", "dpmpp_2m", "dpmpp_2m_sde", "dpmpp_2m_sde_gpu",
-    "dpmpp_3m_sde", "dpmpp_3m_sde_gpu", "ddpm", "lcm", "ddim", "uni_pc",
-    "uni_pc_bh2",
+    "euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral",
+    "lms", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m", "dpmpp_2m_sde",
+    "dpmpp_3m_sde", "ddpm", "lcm", "ddim", "uni_pc", "uni_pc_bh2",
 ]
 
 SCHEDULERS = [
     "normal", "karras", "exponential", "sgm_uniform", "simple",
-    "ddim_uniform", "beta", "linear_quadratic",
+    "ddim_uniform", "beta",
 ]
 
 
 def exec_ksampler(inputs, widgets, ctx):
     pipe = inputs.get("_pipe")
     if not pipe:
-        raise ValueError("KSampler needs a pipeline (connect Load Checkpoint)")
+        raise ValueError("KSampler needs a pipeline — connect MODEL from Load Checkpoint")
 
     positive = inputs.get("POSITIVE")
     negative = inputs.get("NEGATIVE")
-    latent = inputs.get("LATENT")
+    latent_input = inputs.get("LATENT")
+    image_input = inputs.get("IMAGE")
 
-    seed = widgets.get("seed", -1)
-    steps = widgets.get("steps", 20)
-    cfg = widgets.get("cfg", 7.0)
-    sampler = widgets.get("sampler", "euler")
-    scheduler = widgets.get("scheduler", "normal")
-    denoise = widgets.get("denoise", 1.0)
+    seed = int(widgets.get("seed", -1))
+    steps = int(widgets.get("steps", 20))
+    cfg = float(widgets.get("cfg", 7.0))
+    denoise = float(widgets.get("denoise", 1.0))
 
     if seed == -1:
         seed = torch.randint(0, 2**32, (1,)).item()
 
-    log.info(f"KSampler: {steps} steps, cfg={cfg}, sampler={sampler}/{scheduler}, denoise={denoise}, seed={seed}")
-
     generator = torch.Generator("cpu").manual_seed(seed)
-
-    # Get dimensions from latent or positive conditioning
     width = inputs.get("_width", 1024)
     height = inputs.get("_height", 1024)
+
+    log.info(f"KSampler: {steps} steps, cfg={cfg}, denoise={denoise}, seed={seed}, {width}x{height}")
 
     kwargs = {
         "num_inference_steps": steps,
         "guidance_scale": cfg,
         "generator": generator,
+        "output_type": "latent",  # Output latent, not image
     }
 
-    positive_text = positive.get("text", "") if positive else ""
-    negative_text = negative.get("text", "") if negative else ""
+    # Use pre-encoded conditioning if available
+    has_embeds = positive and "prompt_embeds" in positive
 
-    if denoise < 1.0 and inputs.get("IMAGE"):
+    if has_embeds:
+        kwargs["prompt_embeds"] = positive["prompt_embeds"]
+        if "pooled_prompt_embeds" in positive:
+            kwargs["pooled_prompt_embeds"] = positive["pooled_prompt_embeds"]
+
+        if negative and "prompt_embeds" in negative:
+            kwargs["negative_prompt_embeds"] = negative["prompt_embeds"]
+            if "pooled_prompt_embeds" in negative:
+                kwargs["negative_pooled_prompt_embeds"] = negative["pooled_prompt_embeds"]
+    else:
+        # Fallback to text
+        kwargs["prompt"] = positive.get("text", "") if positive else ""
+        neg_text = negative.get("text", "") if negative else ""
+        if neg_text:
+            kwargs["negative_prompt"] = neg_text
+
+    if denoise < 1.0 and image_input is not None:
         # img2img mode
-        kwargs["image"] = inputs["IMAGE"]
+        kwargs["image"] = image_input
         kwargs["strength"] = denoise
-        kwargs["prompt"] = positive_text
-        if negative_text:
-            kwargs["negative_prompt"] = negative_text
     else:
         # txt2img mode
-        kwargs["prompt"] = positive_text
-        kwargs["width"] = width
-        kwargs["height"] = height
-        if negative_text:
-            kwargs["negative_prompt"] = negative_text
+        kwargs["width"] = int(width)
+        kwargs["height"] = int(height)
 
     result = pipe(**kwargs)
-    image = result.images[0]
 
-    return {"IMAGE": image, "LATENT": None}
+    # result.images contains latents when output_type="latent"
+    latent = result.images
+    if not isinstance(latent, torch.Tensor):
+        # Some pipelines return a list or other format
+        latent = torch.tensor(latent)
 
+    log.info(f"KSampler output latent: {latent.shape if hasattr(latent, 'shape') else type(latent)}")
+    return {"LATENT": latent, "IMAGE": None, "_pipe": pipe}
 
-# ── Register ──────────────────────────────────
 
 register_node(NodeTypeDef(
-    type_id="ksampler",
-    category="sampling",
-    label="KSampler",
+    type_id="ksampler", category="sampling", label="KSampler",
     inputs=[
         PortDef("MODEL", "MODEL"),
         PortDef("POSITIVE", "CONDITIONING"),
         PortDef("NEGATIVE", "CONDITIONING"),
         PortDef("LATENT", "LATENT"),
-        PortDef("IMAGE", "IMAGE", optional=True),  # for img2img
+        PortDef("IMAGE", "IMAGE", optional=True),
     ],
     outputs=[
-        PortDef("IMAGE", "IMAGE"),
         PortDef("LATENT", "LATENT"),
     ],
     widgets=[
@@ -103,7 +110,6 @@ register_node(NodeTypeDef(
         WidgetDef("scheduler", "combo", default="normal", options=SCHEDULERS, label="Scheduler"),
         WidgetDef("denoise", "slider", default=1.0, min=0, max=1, step=0.01, label="Denoise"),
     ],
-    execute=exec_ksampler,
-    color="#e88a2a",
-    description="Sample from the model using various samplers and schedulers",
+    execute=exec_ksampler, color="#e88a2a",
+    description="Sample from the model — outputs LATENT (needs VAE Decode for image)",
 ))
