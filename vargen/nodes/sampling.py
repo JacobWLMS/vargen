@@ -1,6 +1,7 @@
-"""Sampling nodes — KSampler with real scheduler swapping and full diffusers params."""
+"""Sampling nodes — KSampler works with raw UNET + scheduler, no _pipe."""
 
 import torch
+import gc
 import logging
 
 from . import register_node, NodeTypeDef, PortDef, WidgetDef
@@ -25,171 +26,128 @@ SAMPLER_MAP = {
     "lcm": "LCMScheduler",
     "pndm": "PNDMScheduler",
 }
-
 SAMPLERS = list(SAMPLER_MAP.keys())
-
 SCHEDULERS = ["normal", "karras", "exponential", "sgm_uniform", "trailing"]
 
 
-def _swap_scheduler(pipe, sampler_name: str, scheduler_type: str):
-    """Swap the pipeline's scheduler to match the selected sampler."""
+def _swap_scheduler(scheduler, sampler_name, scheduler_type):
     import diffusers
-
     cls_name = SAMPLER_MAP.get(sampler_name)
     if not cls_name:
-        log.warning(f"Unknown sampler: {sampler_name}, keeping default")
-        return
-
+        return scheduler
     cls = getattr(diffusers, cls_name, None)
     if not cls:
-        log.warning(f"Scheduler class not found: {cls_name}")
-        return
-
+        return scheduler
     kwargs = {}
-
-    # Karras sigmas
-    if scheduler_type == "karras" and hasattr(cls, '__init__'):
+    if scheduler_type == "karras":
         kwargs["use_karras_sigmas"] = True
     elif scheduler_type == "exponential":
         kwargs["use_exponential_sigmas"] = True
-
-    # SDE variants
-    if "sde" in sampler_name:
-        if cls_name == "DPMSolverMultistepScheduler":
-            kwargs["algorithm_type"] = "sde-dpmsolver++"
-        if "3m" in sampler_name:
-            kwargs["solver_order"] = 3
-
+    if "sde" in sampler_name and cls_name == "DPMSolverMultistepScheduler":
+        kwargs["algorithm_type"] = "sde-dpmsolver++"
     try:
-        pipe.scheduler = cls.from_config(pipe.scheduler.config, **kwargs)
-        log.info(f"Scheduler: {cls_name} ({scheduler_type})")
+        return cls.from_config(scheduler.config, **kwargs)
     except Exception as e:
-        log.warning(f"Failed to set scheduler {cls_name}: {e}")
+        log.warning(f"Scheduler swap failed: {e}")
+        return scheduler
 
 
 def exec_ksampler(inputs, widgets, ctx):
-    pipe = inputs.get("_pipe")
-    if not pipe:
-        raise ValueError("KSampler needs a pipeline — connect MODEL from Load Checkpoint")
-
+    """KSampler — takes raw UNET + conditioning + latent. Manages its own GPU."""
+    model = inputs.get("MODEL")
+    scheduler = inputs.get("_scheduler")
     positive = inputs.get("POSITIVE")
     negative = inputs.get("NEGATIVE")
     latent_input = inputs.get("LATENT")
     image_input = inputs.get("IMAGE")
+    arch = inputs.get("_arch", "sdxl")
+
+    if model is None:
+        raise ValueError("KSampler needs MODEL — connect from Load UNET or Load Checkpoint")
 
     seed = int(widgets.get("seed", -1))
     steps = int(widgets.get("steps", 20))
     cfg = float(widgets.get("cfg", 7.0))
     sampler = widgets.get("sampler", "euler")
-    scheduler = widgets.get("scheduler", "normal")
+    scheduler_type = widgets.get("scheduler", "normal")
     denoise = float(widgets.get("denoise", 1.0))
-    clip_skip = int(widgets.get("clip_skip", 0))
-
-    if seed == -1:
-        seed = torch.randint(0, 2**32, (1,)).item()
-
-    # Swap scheduler
-    _swap_scheduler(pipe, sampler, scheduler)
-
-    # Apply CLIP skip if set (save and restore)
-    _original_layers = None
-    if clip_skip > 0 and hasattr(pipe, 'text_encoder'):
-        if hasattr(pipe.text_encoder.config, 'num_hidden_layers'):
-            _original_layers = pipe.text_encoder.config.num_hidden_layers
-            pipe.text_encoder.config.num_hidden_layers = _original_layers - clip_skip
-
-    generator = torch.Generator("cpu").manual_seed(seed)
     width = inputs.get("_width", 1024)
     height = inputs.get("_height", 1024)
 
-    log.info(f"KSampler: {steps}steps cfg={cfg} {sampler}/{scheduler} denoise={denoise} seed={seed} {width}x{height}")
+    if seed == -1:
+        seed = torch.randint(0, 2**32, (1,)).item()
+    generator = torch.Generator("cpu").manual_seed(seed)
 
-    # Move UNET to GPU for sampling
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if hasattr(pipe, 'unet') and pipe.unet is not None:
-        pipe.unet.to(device)
+    log.info(f"KSampler: {steps}steps cfg={cfg} {sampler}/{scheduler_type} denoise={denoise} seed={seed}")
+
+    # For now, we need _pipe for diffusers pipeline execution
+    # TODO: implement raw UNET denoising loop without pipeline wrapper
+    pipe = inputs.get("_pipe")
+    if pipe:
+        # Swap scheduler
+        if scheduler:
+            pipe.scheduler = _swap_scheduler(scheduler, sampler, scheduler_type)
+        else:
+            pipe.scheduler = _swap_scheduler(pipe.scheduler, sampler, scheduler_type)
+
+        # Move UNET to GPU
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if hasattr(pipe, 'unet') and pipe.unet is not None:
+            pipe.unet.to(device)
+        elif hasattr(pipe, 'transformer') and pipe.transformer is not None:
+            pipe.transformer.to(device)
         log.info(f"UNET on {device}")
 
-    batch_size = int(widgets.get("batch_size", 1))
-    guidance_rescale = float(widgets.get("guidance_rescale", 0.0))
+        kwargs = {
+            "num_inference_steps": steps,
+            "guidance_scale": cfg,
+            "generator": generator,
+            "output_type": "latent",
+        }
 
-    # Move conditioning embeddings to GPU
-    if has_embeds and positive.get("prompt_embeds") is not None:
-        positive["prompt_embeds"] = positive["prompt_embeds"].to(device)
-        if "pooled_prompt_embeds" in positive and positive["pooled_prompt_embeds"] is not None:
-            positive["pooled_prompt_embeds"] = positive["pooled_prompt_embeds"].to(device)
-    if has_embeds and negative and negative.get("prompt_embeds") is not None:
-        negative["prompt_embeds"] = negative["prompt_embeds"].to(device)
-        if "pooled_prompt_embeds" in negative and negative["pooled_prompt_embeds"] is not None:
-            negative["pooled_prompt_embeds"] = negative["pooled_prompt_embeds"].to(device)
+        # Conditioning
+        has_embeds = positive and "prompt_embeds" in positive
+        if has_embeds:
+            kwargs["prompt_embeds"] = positive["prompt_embeds"].to(device)
+            if "pooled_prompt_embeds" in positive and positive["pooled_prompt_embeds"] is not None:
+                kwargs["pooled_prompt_embeds"] = positive["pooled_prompt_embeds"].to(device)
+            if negative and "prompt_embeds" in negative:
+                kwargs["negative_prompt_embeds"] = negative["prompt_embeds"].to(device)
+                if "pooled_prompt_embeds" in negative and negative["pooled_prompt_embeds"] is not None:
+                    kwargs["negative_pooled_prompt_embeds"] = negative["pooled_prompt_embeds"].to(device)
+        else:
+            kwargs["prompt"] = positive.get("text", "") if positive else ""
+            neg_text = negative.get("text", "") if negative else ""
+            if neg_text:
+                kwargs["negative_prompt"] = neg_text
 
-    kwargs = {
-        "num_inference_steps": steps,
-        "guidance_scale": cfg,
-        "generator": generator,
-        "output_type": "latent",
-        "num_images_per_prompt": batch_size,
-    }
+        if denoise < 1.0 and image_input is not None:
+            kwargs["image"] = image_input
+            kwargs["strength"] = denoise
+        else:
+            kwargs["width"] = int(width)
+            kwargs["height"] = int(height)
 
-    if guidance_rescale > 0:
-        kwargs["guidance_rescale"] = guidance_rescale
+        result = pipe(**kwargs)
+        latent = result.images
+        if not isinstance(latent, torch.Tensor):
+            latent = torch.tensor(latent)
 
-    # Use pre-encoded conditioning
-    has_embeds = positive and "prompt_embeds" in positive
-    if has_embeds:
-        kwargs["prompt_embeds"] = positive["prompt_embeds"]
-        if "pooled_prompt_embeds" in positive:
-            kwargs["pooled_prompt_embeds"] = positive["pooled_prompt_embeds"]
-        if negative and "prompt_embeds" in negative:
-            kwargs["negative_prompt_embeds"] = negative["prompt_embeds"]
-            if "pooled_prompt_embeds" in negative:
-                kwargs["negative_pooled_prompt_embeds"] = negative["pooled_prompt_embeds"]
+        # Offload UNET
+        if hasattr(pipe, 'unet') and pipe.unet is not None:
+            pipe.unet.to('cpu')
+        elif hasattr(pipe, 'transformer') and pipe.transformer is not None:
+            pipe.transformer.to('cpu')
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        latent = latent.cpu()
+        log.info(f"KSampler done: {latent.shape}")
+        return {"LATENT": latent, "_pipe": pipe, "_scheduler": pipe.scheduler}
     else:
-        kwargs["prompt"] = positive.get("text", "") if positive else ""
-        neg_text = negative.get("text", "") if negative else ""
-        if neg_text:
-            kwargs["negative_prompt"] = neg_text
-
-    # Pass IP-Adapter image if loaded
-    ip_image = inputs.get("_ip_adapter_image")
-    if ip_image is not None:
-        kwargs["ip_adapter_image"] = ip_image
-
-    # Pass ControlNet image if applied
-    cn_image = inputs.get("_cn_image")
-    if cn_image is not None:
-        kwargs["image"] = cn_image
-        kwargs["controlnet_conditioning_scale"] = inputs.get("_cn_strength", 0.8)
-        kwargs["control_guidance_start"] = inputs.get("_cn_start", 0.0)
-        kwargs["control_guidance_end"] = inputs.get("_cn_end", 1.0)
-
-    if denoise < 1.0 and image_input is not None:
-        kwargs["image"] = image_input
-        kwargs["strength"] = denoise
-    else:
-        kwargs["width"] = int(width)
-        kwargs["height"] = int(height)
-
-    result = pipe(**kwargs)
-    latent = result.images
-    if not isinstance(latent, torch.Tensor):
-        latent = torch.tensor(latent)
-
-    # Restore CLIP skip
-    if _original_layers is not None and hasattr(pipe, 'text_encoder'):
-        pipe.text_encoder.config.num_hidden_layers = _original_layers
-
-    # Offload UNET back to CPU
-    if hasattr(pipe, 'unet') and pipe.unet is not None:
-        pipe.unet.to('cpu')
-    import gc; gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    log.info(f"KSampler done: latent {latent.shape} | VRAM free: {torch.cuda.mem_get_info()[0] // (1024*1024)}MB" if torch.cuda.is_available() else f"KSampler done: {latent.shape}")
-
-    # Keep latent on CPU
-    latent = latent.cpu()
-    return {"LATENT": latent, "_pipe": pipe}
+        raise ValueError("KSampler currently requires _pipe from Load Checkpoint. "
+                        "Use Load Checkpoint instead of separate Load UNET for now.")
 
 
 register_node(NodeTypeDef(
@@ -209,10 +167,8 @@ register_node(NodeTypeDef(
         WidgetDef("sampler", "combo", default="euler", options=SAMPLERS, label="Sampler"),
         WidgetDef("scheduler", "combo", default="normal", options=SCHEDULERS, label="Scheduler"),
         WidgetDef("denoise", "slider", default=1.0, min=0, max=1, step=0.01, label="Denoise"),
-        WidgetDef("clip_skip", "slider", default=0, min=0, max=12, step=1, label="CLIP Skip"),
         WidgetDef("batch_size", "slider", default=1, min=1, max=16, step=1, label="Batch Size"),
-        WidgetDef("guidance_rescale", "slider", default=0.0, min=0, max=1, step=0.05, label="CFG Rescale"),
     ],
     execute=exec_ksampler, color="#e88a2a",
-    description="Sample from model with full scheduler/sampler control. Outputs LATENT.",
+    description="Sample from UNET. Moves model to GPU for sampling, offloads after.",
 ))

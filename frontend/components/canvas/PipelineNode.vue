@@ -149,7 +149,7 @@ function getComboOptions(w: any): string[] {
   if (w.name === 'vae') return getModelNames('vae')
   if (w.name === 'embedding') return getModelNames('embeddings')
   if (w.name === 'clip' || w.name === 'clip_1' || w.name === 'clip_2') return getModelNames('clip', 'text_encoders')
-  if (w.name === 'unet') return getModelNames('diffusion_models', 'unet')
+  if (w.name === 'unet') return getModelNames('diffusion_models', 'unet', 'checkpoints')
   return w.options || []
 }
 function getModelNames(...cats: string[]): string[] {

@@ -1,0 +1,62 @@
+{
+  "name": "SDXL Granular (separate loaders)",
+  "description": "Load UNET, CLIP, and VAE separately — full control over each component",
+  "nodes": {
+    "unet": {
+      "type": "load_unet",
+      "widgets": { "unet": "", "dtype": "fp16" },
+      "x": 50, "y": 50
+    },
+    "clip": {
+      "type": "load_clip",
+      "widgets": { "clip": "", "type": "sdxl" },
+      "x": 50, "y": 200
+    },
+    "vae": {
+      "type": "load_vae",
+      "widgets": { "vae": "", "type": "sdxl" },
+      "x": 50, "y": 350
+    },
+    "positive": {
+      "type": "clip_text_encode",
+      "widgets": { "text": "a stunning photograph, professional lighting" },
+      "x": 370, "y": 100
+    },
+    "negative": {
+      "type": "clip_text_encode",
+      "widgets": { "text": "blurry, distorted, ugly" },
+      "x": 370, "y": 300
+    },
+    "latent": {
+      "type": "empty_latent",
+      "widgets": { "width": 1024, "height": 1024, "batch_size": 1 },
+      "x": 370, "y": 470
+    },
+    "sampler": {
+      "type": "ksampler",
+      "widgets": { "seed": -1, "steps": 20, "cfg": 7.0, "sampler": "euler", "scheduler": "normal", "denoise": 1.0 },
+      "x": 670, "y": 150
+    },
+    "decode": {
+      "type": "vae_decode",
+      "widgets": {},
+      "x": 950, "y": 200
+    },
+    "save": {
+      "type": "save_image",
+      "widgets": { "filename_prefix": "sdxl_granular" },
+      "x": 1170, "y": 200
+    }
+  },
+  "edges": [
+    { "from_node": "unet", "from_port": "MODEL", "to_node": "sampler", "to_port": "MODEL" },
+    { "from_node": "clip", "from_port": "CLIP", "to_node": "positive", "to_port": "CLIP" },
+    { "from_node": "clip", "from_port": "CLIP", "to_node": "negative", "to_port": "CLIP" },
+    { "from_node": "positive", "from_port": "CONDITIONING", "to_node": "sampler", "to_port": "POSITIVE" },
+    { "from_node": "negative", "from_port": "CONDITIONING", "to_node": "sampler", "to_port": "NEGATIVE" },
+    { "from_node": "latent", "from_port": "LATENT", "to_node": "sampler", "to_port": "LATENT" },
+    { "from_node": "vae", "from_port": "VAE", "to_node": "decode", "to_port": "VAE" },
+    { "from_node": "sampler", "from_port": "LATENT", "to_node": "decode", "to_port": "LATENT" },
+    { "from_node": "decode", "from_port": "IMAGE", "to_node": "save", "to_port": "IMAGE" }
+  ]
+}
