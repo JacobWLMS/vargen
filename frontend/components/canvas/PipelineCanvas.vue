@@ -1,0 +1,320 @@
+<template>
+  <div
+    ref="viewport"
+    class="relative overflow-hidden cursor-grab"
+    :class="{ 'cursor-grabbing': isPanning }"
+    style="background: var(--bg-primary)"
+    @mousedown.middle="startPan"
+    @mousedown.left="onCanvasMouseDown"
+    @mousemove="onMouseMove"
+    @mouseup="onMouseUp"
+    @wheel="onZoom"
+    @dblclick="onDoubleClick"
+    @dragover.prevent
+    @drop="onDrop"
+  >
+    <!-- Dot grid -->
+    <div class="absolute inset-0 pointer-events-none canvas-grid" :style="gridStyle" />
+
+    <!-- Transform surface -->
+    <div :style="surfaceStyle">
+      <!-- Edges (SVG) -->
+      <svg class="absolute top-0 left-0 pointer-events-none" style="overflow: visible; width: 1px; height: 1px">
+        <path
+          v-for="edge in store.edges"
+          :key="edge.id"
+          :d="edgePath(edge)"
+          fill="none"
+          :stroke="edgeColor(edge)"
+          :stroke-width="edgeWidth(edge)"
+          :class="{ 'edge-flowing': isEdgeFlowing(edge) }"
+        />
+      </svg>
+
+      <!-- Nodes -->
+      <PipelineNode
+        v-for="node in store.nodes"
+        :key="node.id"
+        :node="node"
+        :selected="node.id === store.selectedNodeId"
+        :status="store.stepStatuses[node.name]"
+        :duration="store.stepDurations[node.name]"
+        @select="store.selectedNodeId = node.id"
+        @move="(dx, dy) => onNodeDrag(node.id, dx, dy)"
+        @start-connect="onStartConnect(node.id, $event)"
+      />
+
+      <!-- Connection being drawn -->
+      <svg v-if="connecting" class="absolute top-0 left-0 pointer-events-none" style="overflow: visible; width: 1px; height: 1px">
+        <path :d="connectingPath" fill="none" stroke="var(--accent)" stroke-width="2" opacity="0.6" stroke-dasharray="6 3" />
+      </svg>
+    </div>
+
+    <!-- Empty state -->
+    <div v-if="!store.nodes.length" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+      <div class="text-center">
+        <p class="text-[14px]" style="color: var(--text-muted)">Double-click to add a step</p>
+        <p class="text-[11px] mt-1" style="color: var(--text-muted)">or drag from the asset panel</p>
+      </div>
+    </div>
+
+    <!-- Quick-add menu -->
+    <div
+      v-if="quickAdd.open"
+      class="absolute z-50 py-1 rounded"
+      :style="{ left: quickAdd.x + 'px', top: quickAdd.y + 'px', background: 'var(--bg-panel)', border: '1px solid var(--border)', minWidth: '180px' }"
+    >
+      <div
+        v-for="st in quickAddTypes"
+        :key="st.type"
+        @click="addNodeAtQuickAdd(st.type)"
+        class="px-3 py-1.5 flex items-center gap-2 cursor-pointer text-[12px]"
+        style="color: var(--text-secondary)"
+        @mouseenter="($event.target as HTMLElement).style.background = 'var(--bg-hover)'"
+        @mouseleave="($event.target as HTMLElement).style.background = 'transparent'"
+      >
+        <span class="w-2 h-2 rounded-full" :style="{ background: st.color }" />
+        {{ st.type }}
+      </div>
+    </div>
+
+    <!-- Zoom indicator -->
+    <div class="absolute bottom-2 left-2 text-[10px] mono" style="color: var(--text-muted)">
+      {{ Math.round(store.zoom * 100) }}%
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { useWorkspaceStore, type GraphEdge } from '~/stores/workspace'
+
+const store = useWorkspaceStore()
+const viewport = ref<HTMLElement>()
+
+// Pan state
+const isPanning = ref(false)
+const panStart = { x: 0, y: 0 }
+
+// Connection drawing state
+const connecting = ref(false)
+const connectFrom = ref('')
+const connectMouse = reactive({ x: 0, y: 0 })
+
+// Quick-add menu
+const quickAdd = reactive({ open: false, x: 0, y: 0, canvasX: 0, canvasY: 0 })
+
+const quickAddTypes = [
+  { type: 'vision-llm', color: '#5eead4' },
+  { type: 'txt2img', color: '#e88a2a' },
+  { type: 'img2img', color: '#a882ff' },
+  { type: 'pixel-upscale', color: '#60a5fa' },
+  { type: 'inpaint', color: '#f472b6' },
+  { type: 'face-detail', color: '#fb923c' },
+]
+
+const surfaceStyle = computed(() => ({
+  transform: `translate(${store.pan.x}px, ${store.pan.y}px) scale(${store.zoom})`,
+  transformOrigin: '0 0',
+  position: 'absolute' as const,
+  top: '0', left: '0',
+  width: '1px', height: '1px',
+}))
+
+const gridStyle = computed(() => {
+  const size = 20 * store.zoom
+  const ox = store.pan.x % size
+  const oy = store.pan.y % size
+  return {
+    backgroundImage: `radial-gradient(circle, #111 ${store.zoom > 0.5 ? '1px' : '0.5px'}, transparent 1px)`,
+    backgroundSize: `${size}px ${size}px`,
+    backgroundPosition: `${ox}px ${oy}px`,
+  }
+})
+
+function startPan(e: MouseEvent) {
+  isPanning.value = true
+  panStart.x = e.clientX - store.pan.x
+  panStart.y = e.clientY - store.pan.y
+}
+
+function onCanvasMouseDown(e: MouseEvent) {
+  if (e.target === viewport.value || (e.target as HTMLElement).classList.contains('canvas-grid')) {
+    // Click on empty canvas — deselect and start pan
+    store.selectedNodeId = null
+    quickAdd.open = false
+    if (e.shiftKey || e.button === 0) {
+      isPanning.value = true
+      panStart.x = e.clientX - store.pan.x
+      panStart.y = e.clientY - store.pan.y
+    }
+  }
+}
+
+function onMouseMove(e: MouseEvent) {
+  if (isPanning.value) {
+    store.pan.x = e.clientX - panStart.x
+    store.pan.y = e.clientY - panStart.y
+  }
+  if (connecting.value) {
+    const rect = viewport.value!.getBoundingClientRect()
+    connectMouse.x = (e.clientX - rect.left - store.pan.x) / store.zoom
+    connectMouse.y = (e.clientY - rect.top - store.pan.y) / store.zoom
+  }
+}
+
+function onMouseUp() {
+  isPanning.value = false
+  if (connecting.value) {
+    connecting.value = false
+    // TODO: check if dropped on a node port
+  }
+}
+
+function onZoom(e: WheelEvent) {
+  e.preventDefault()
+  const delta = e.deltaY > 0 ? 0.9 : 1.1
+  const newZoom = Math.min(2, Math.max(0.25, store.zoom * delta))
+
+  // Zoom toward cursor
+  const rect = viewport.value!.getBoundingClientRect()
+  const cx = e.clientX - rect.left
+  const cy = e.clientY - rect.top
+  store.pan.x = cx - (cx - store.pan.x) * (newZoom / store.zoom)
+  store.pan.y = cy - (cy - store.pan.y) * (newZoom / store.zoom)
+  store.zoom = newZoom
+}
+
+function onDoubleClick(e: MouseEvent) {
+  const rect = viewport.value!.getBoundingClientRect()
+  quickAdd.x = e.clientX - rect.left
+  quickAdd.y = e.clientY - rect.top
+  quickAdd.canvasX = (quickAdd.x - store.pan.x) / store.zoom
+  quickAdd.canvasY = (quickAdd.y - store.pan.y) / store.zoom
+  quickAdd.open = true
+}
+
+function addNodeAtQuickAdd(type: string) {
+  const node = store.addNode(type, quickAdd.canvasX, quickAdd.canvasY)
+
+  // Auto-connect to the last node
+  if (store.nodes.length > 1) {
+    const prev = store.nodes[store.nodes.length - 2]
+    store.addEdge(prev.id, node.id, type === 'vision-llm' ? 'input_image' : 'input')
+  }
+
+  quickAdd.open = false
+}
+
+function onDrop(e: DragEvent) {
+  const rect = viewport.value!.getBoundingClientRect()
+  const x = (e.clientX - rect.left - store.pan.x) / store.zoom
+  const y = (e.clientY - rect.top - store.pan.y) / store.zoom
+
+  // Handle step type drop
+  const stepType = e.dataTransfer?.getData('application/vargen-step')
+  if (stepType) {
+    const node = store.addNode(stepType, x, y)
+    if (store.nodes.length > 1) {
+      const prev = store.nodes[store.nodes.length - 2]
+      store.addEdge(prev.id, node.id, 'input')
+    }
+    return
+  }
+
+  // Handle model drop
+  const modelData = e.dataTransfer?.getData('application/vargen-model')
+  if (modelData) {
+    const model = JSON.parse(modelData)
+    // Determine step type from model category
+    const typeMap: Record<string, string> = {
+      checkpoints: 'txt2img', diffusion_models: 'txt2img', upscale_models: 'pixel-upscale',
+      loras: 'txt2img', controlnet: 'txt2img',
+    }
+    const type = typeMap[model.category] || 'txt2img'
+    const node = store.addNode(type, x, y)
+    node.model = model.name
+    return
+  }
+
+  // Handle image drop
+  const files = e.dataTransfer?.files
+  if (files?.length) {
+    const file = files[0]
+    if (file.type.startsWith('image/')) {
+      uploadImage(file)
+    }
+  }
+}
+
+async function uploadImage(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: form })
+    if (res.ok) {
+      const data = await res.json()
+      store.inputImage = { filename: data.filename, previewUrl: URL.createObjectURL(file) }
+    }
+  } catch {}
+}
+
+function onNodeDrag(id: string, dx: number, dy: number) {
+  const node = store.nodeById(id)
+  if (node) {
+    node.x += dx / store.zoom
+    node.y += dy / store.zoom
+  }
+}
+
+function onStartConnect(nodeId: string, e: MouseEvent) {
+  connecting.value = true
+  connectFrom.value = nodeId
+  const node = store.nodeById(nodeId)!
+  connectMouse.x = node.x + 180
+  connectMouse.y = node.y + 40
+}
+
+// Edge rendering
+function edgePath(edge: GraphEdge): string {
+  const from = store.nodeById(edge.from)
+  const to = store.nodeById(edge.to)
+  if (!from || !to) return ''
+
+  const x1 = from.x + 180 // right side of node
+  const y1 = from.y + 40  // vertical center
+  const x2 = to.x          // left side of node
+  const y2 = to.y + 40
+  const cpx = Math.abs(x2 - x1) * 0.5
+  return `M ${x1} ${y1} C ${x1 + cpx} ${y1}, ${x2 - cpx} ${y2}, ${x2} ${y2}`
+}
+
+const connectingPath = computed(() => {
+  const from = store.nodeById(connectFrom.value)
+  if (!from) return ''
+  const x1 = from.x + 180
+  const y1 = from.y + 40
+  const cpx = Math.abs(connectMouse.x - x1) * 0.5
+  return `M ${x1} ${y1} C ${x1 + cpx} ${y1}, ${connectMouse.x - cpx} ${connectMouse.y}, ${connectMouse.x} ${connectMouse.y}`
+})
+
+function edgeColor(edge: GraphEdge): string {
+  if (isEdgeFlowing(edge)) return 'var(--accent)'
+  return '#1a1a1a'
+}
+
+function edgeWidth(edge: GraphEdge): number {
+  return isEdgeFlowing(edge) ? 2 : 1.5
+}
+
+function isEdgeFlowing(edge: GraphEdge): boolean {
+  const from = store.nodeById(edge.from)
+  const to = store.nodeById(edge.to)
+  if (!from || !to) return false
+  return store.stepStatuses[from.name] === 'done' && store.stepStatuses[to.name] === 'running'
+}
+</script>
+
+<style>
+@keyframes edge-flow { to { stroke-dashoffset: -20; } }
+.edge-flowing { stroke-dasharray: 8 4; animation: edge-flow 0.5s linear infinite; }
+</style>
