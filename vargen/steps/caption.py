@@ -17,7 +17,7 @@ def run_caption(model_ref, params: dict, mm, pipeline) -> str:
         prepend: text to prepend to the caption output
         max_tokens: max generation tokens (default: 512)
     """
-    from transformers import AutoProcessor, AutoModelForVision2Seq
+    from transformers import AutoProcessor, AutoModelForCausalLM
 
     image: Image.Image = params.get("input_image")
     if image is None:
@@ -32,7 +32,7 @@ def run_caption(model_ref, params: dict, mm, pipeline) -> str:
     log.info(f"Loading caption model from {model_path}")
 
     # Load model with automatic device mapping for low VRAM
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         str(model_path),
         torch_dtype=torch.float16,
         device_map="auto",
