@@ -390,6 +390,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       ws.onopen = () => {
         ws.send(JSON.stringify({ graph, image_filename: this.inputImage?.filename }))
         this.log('info', 'Connected to graph executor')
+        this.log('info', `VRAM: ${this.vramFree}MB free / ${this.vramTotal}MB total`)
       }
 
       ws.onmessage = (event) => {
@@ -398,38 +399,54 @@ export const useWorkspaceStore = defineStore('workspace', {
         switch (data.event) {
           case 'node_start':
             this.stepStatuses[nodeId] = 'running'
-            this.log('info', `[${data.index + 1}/${data.total}] Running: ${data.type}`)
+            this.log('info', `[${data.index + 1}/${data.total}] ${data.type}...`)
             break
           case 'node_done':
             this.stepStatuses[nodeId] = data.error ? 'error' : 'done'
             this.stepDurations[nodeId] = data.duration
-            if (data.error) this.log('error', `  ${data.type}: ${data.error}`)
-            else this.log('info', `  ${data.type}: ${data.duration.toFixed(1)}s`)
+            if (data.error) {
+              this.log('error', `  FAILED: ${data.type}`)
+              this.log('error', `  ${data.error}`)
+            } else {
+              this.log('info', `  done in ${data.duration.toFixed(1)}s`)
+            }
             if (data.image_url) {
               this.outputs.push({ url: data.image_url, step: nodeId, timestamp: Date.now() })
               this.selectedOutputIndex = this.outputs.length - 1
+              this.log('info', `  output saved`)
+            }
+            // Show backend logs if present
+            if (data.logs) {
+              for (const l of data.logs) this.log(l.level || 'info', `  ${l.message}`)
             }
             break
-          case 'complete':
+          case 'log':
+            // Backend can send log events directly
+            this.log(data.level || 'info', data.message)
+            break
+          case 'complete': {
             this.running = false
-            this.log('info', 'Graph execution complete')
+            const totalTime = Object.values(this.stepDurations).reduce((a, b) => a + (b as number), 0)
+            const nodeCount = Object.keys(this.stepStatuses).length
+            this.log('info', `Complete: ${nodeCount} nodes in ${totalTime.toFixed(1)}s`)
             ws.close()
             break
+          }
           case 'cancelled':
             this.running = false
-            this.log('warn', 'Cancelled')
+            this.log('warn', 'Cancelled by user')
             ws.close()
             break
           case 'error':
             this.running = false
-            this.log('error', data.message)
+            this.log('error', `Execution failed: ${data.message}`)
             ws.close()
             break
         }
       }
 
-      ws.onerror = () => { this.running = false; this.log('error', 'WebSocket failed') }
-      ws.onclose = (e) => { if (this.running) { this.running = false; this.log('error', `Connection lost (${e.code})`) } }
+      ws.onerror = () => { this.running = false; this.log('error', 'WebSocket connection failed — is the server running?') }
+      ws.onclose = (e) => { if (this.running) { this.running = false; this.log('error', `Server disconnected (code ${e.code}). Check terminal for details.`) } }
     },
 
     async cancel() {

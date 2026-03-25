@@ -286,6 +286,43 @@ async def run_graph_ws(ws: WebSocket):
         except Exception as e:
             log.warning(f"WebSocket send failed: {e}")
 
+    def send_log(level: str, message: str):
+        asyncio.run_coroutine_threadsafe(
+            send({"event": "log", "level": level, "message": message}), loop)
+
+    # Capture backend logs and forward to WebSocket
+    class WsLogHandler(logging.Handler):
+        def emit(self, record):
+            level = {"DEBUG": "debug", "INFO": "info", "WARNING": "warn", "ERROR": "error"}.get(record.levelname, "info")
+            send_log(level, record.getMessage())
+
+    ws_handler = WsLogHandler()
+    ws_handler.setLevel(logging.INFO)
+    # Attach to node loggers
+    node_loggers = [
+        logging.getLogger("vargen.nodes.loaders"),
+        logging.getLogger("vargen.nodes.sampling"),
+        logging.getLogger("vargen.nodes.conditioning"),
+        logging.getLogger("vargen.nodes.latent"),
+        logging.getLogger("vargen.nodes.image"),
+        logging.getLogger("vargen.nodes.controlnet"),
+        logging.getLogger("vargen.nodes.ipadapter"),
+        logging.getLogger("vargen.nodes.inpaint"),
+        logging.getLogger("vargen.nodes.flux"),
+        logging.getLogger("vargen.nodes.model_utils"),
+        logging.getLogger("vargen.nodes.clip"),
+        logging.getLogger("vargen.nodes.executor"),
+    ]
+    for logger in node_loggers:
+        logger.addHandler(ws_handler)
+
+    # Send initial info
+    send_log("info", f"Graph: {len(data['graph'].get('nodes', {}))} nodes, {len(data['graph'].get('edges', []))} edges")
+    if torch.cuda.is_available():
+        free = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        total = torch.cuda.mem_get_info()[1] // (1024 * 1024)
+        send_log("info", f"VRAM: {free}MB free / {total}MB total")
+
     def on_start(nid, node, idx, total):
         asyncio.run_coroutine_threadsafe(
             send({"event": "node_start", "node_id": nid, "type": node["type"], "index": idx, "total": total}), loop)
@@ -295,11 +332,9 @@ async def run_graph_ws(ws: WebSocket):
         if error:
             msg["error"] = error
         elif result:
-            # Check for saved images
             if "_saved_url" in result:
                 msg["image_url"] = result["_saved_url"]
             elif result.get("IMAGE") is not None and hasattr(result["IMAGE"], "save"):
-                # Auto-save preview
                 ts = int(time.time())
                 path = OUTPUT_DIR / f"preview_{nid}_{ts}.png"
                 result["IMAGE"].save(path)
@@ -321,8 +356,10 @@ async def run_graph_ws(ws: WebSocket):
         except Exception:
             pass  # WebSocket might already be closed
     finally:
-        # Always cleanup VRAM after execution
-        import gc
+        # Remove WebSocket log handlers
+        for logger in node_loggers:
+            logger.removeHandler(ws_handler)
+        # Cleanup VRAM
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
