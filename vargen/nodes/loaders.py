@@ -1,7 +1,6 @@
-"""Loader nodes — each loads ONE component. No hidden bundling."""
+"""Loader nodes — load models, images, create empty latents."""
 
 import torch
-import gc
 import logging
 from PIL import Image
 from pathlib import Path
@@ -10,239 +9,72 @@ from . import register_node, NodeTypeDef, PortDef, WidgetDef
 
 log = logging.getLogger(__name__)
 
-DTYPE_MAP = {"auto": None, "fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}
+DTYPE_MAP = {
+    "auto": None,
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+    "fp32": torch.float32,
+}
 
+OFFLOAD_MODES = ["auto", "sequential_cpu", "model_cpu", "gpu_only", "cpu_only"]
 
-def _flush():
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
-# ── Load UNET ─────────────────────────────────
-
-def exec_load_unet(inputs, widgets, ctx):
-    """Load a UNET / diffusion model. Stays on CPU until KSampler moves it."""
-    name = widgets.get("unet", "")
-    if not name:
-        raise ValueError("No model selected")
-
-    dtype_str = widgets.get("dtype", "auto")
-    mm = ctx["model_manager"]
-
-    path = mm.find_model("diffusion_models", name) or mm.find_model("checkpoints", name) or mm.find_model("unet", name)
-    if not path:
-        raise ValueError(f"Model not found: {name}")
-
-    is_gguf = str(path).lower().endswith(".gguf")
-    is_flux = "flux" in name.lower() or "flux" in str(path).lower()
-    torch_dtype = DTYPE_MAP.get(dtype_str) or (torch.bfloat16 if (is_flux or is_gguf) else torch.float16)
-
-    log.info(f"Loading UNET: {path.name} (dtype={dtype_str})")
-
-    if is_gguf:
-        from diffusers import FluxTransformer2DModel, GGUFQuantizationConfig
-        gguf_config = GGUFQuantizationConfig(compute_dtype=torch_dtype)
-        model = FluxTransformer2DModel.from_single_file(str(path), quantization_config=gguf_config, torch_dtype=torch_dtype)
-        arch = "flux"
-    elif is_flux:
-        from diffusers import FluxTransformer2DModel
-        if path.is_file():
-            model = FluxTransformer2DModel.from_single_file(str(path), torch_dtype=torch_dtype)
-        else:
-            model = FluxTransformer2DModel.from_pretrained(str(path), torch_dtype=torch_dtype)
-        arch = "flux"
-    else:
-        from diffusers import UNet2DConditionModel
-        if path.is_file():
-            model = UNet2DConditionModel.from_single_file(str(path), torch_dtype=torch_dtype)
-        else:
-            model = UNet2DConditionModel.from_pretrained(str(path), torch_dtype=torch_dtype)
-        arch = "sdxl"  # Will be corrected by user's CLIP choice
-
-    model.to("cpu")
-    log.info(f"UNET loaded: {path.name} ({arch}, {torch_dtype})")
-    return {"MODEL": model, "_arch": arch}
-
-
-# ── Load CLIP ─────────────────────────────────
-
-def exec_load_clip(inputs, widgets, ctx):
-    """Load CLIP text encoder + tokenizer. Stays on CPU until CLIP Encode moves it."""
-    name = widgets.get("clip", "")
-    clip_type = widgets.get("type", "sdxl")
-    if not name:
-        raise ValueError("No CLIP model selected")
-
-    mm = ctx["model_manager"]
-    path = mm.find_model("text_encoders", name) or mm.find_model("clip", name)
-
-    log.info(f"Loading CLIP: {name} (type={clip_type})")
-
-    if clip_type == "sdxl" and not path:
-        # SDXL needs dual CLIP from HuggingFace
-        from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextModelWithProjection
-        log.info("Loading SDXL dual CLIP from stabilityai/stable-diffusion-xl-base-1.0")
-        tokenizer = CLIPTokenizer.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer")
-        text_encoder = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder", torch_dtype=torch.float16)
-        tokenizer_2 = CLIPTokenizer.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer_2")
-        text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder_2", torch_dtype=torch.float16)
-        text_encoder.to("cpu")
-        text_encoder_2.to("cpu")
-        return {"CLIP": {"tokenizer": tokenizer, "text_encoder": text_encoder, "tokenizer_2": tokenizer_2, "text_encoder_2": text_encoder_2, "arch": "sdxl"}}
-
-    elif clip_type == "flux" and not path:
-        # FLUX needs T5 + CLIP-L from HuggingFace
-        from transformers import T5EncoderModel, T5TokenizerFast, CLIPTokenizer, CLIPTextModel
-        log.info("Loading FLUX CLIP (T5 + CLIP-L) from black-forest-labs/FLUX.1-dev")
-
-        # Check for local fp8 T5
-        t5_local = mm.find_model("text_encoders", "t5xxl_fp8_e4m3fn.safetensors")
-        if t5_local:
-            log.info(f"Found local T5: {t5_local.name} — loading in 8-bit")
-            try:
-                from diffusers import BitsAndBytesConfig
-                quant = BitsAndBytesConfig(load_in_8bit=True)
-                text_encoder_2 = T5EncoderModel.from_pretrained("black-forest-labs/FLUX.1-dev", subfolder="text_encoder_2", quantization_config=quant, torch_dtype=torch.bfloat16)
-            except Exception as e:
-                log.warning(f"8-bit T5 failed: {e}, loading fp16")
-                text_encoder_2 = T5EncoderModel.from_pretrained("black-forest-labs/FLUX.1-dev", subfolder="text_encoder_2", torch_dtype=torch.bfloat16)
-        else:
-            text_encoder_2 = T5EncoderModel.from_pretrained("black-forest-labs/FLUX.1-dev", subfolder="text_encoder_2", torch_dtype=torch.bfloat16)
-
-        tokenizer = CLIPTokenizer.from_pretrained("black-forest-labs/FLUX.1-dev", subfolder="tokenizer")
-        text_encoder = CLIPTextModel.from_pretrained("black-forest-labs/FLUX.1-dev", subfolder="text_encoder", torch_dtype=torch.bfloat16)
-        tokenizer_2 = T5TokenizerFast.from_pretrained("black-forest-labs/FLUX.1-dev", subfolder="tokenizer_2")
-
-        text_encoder.to("cpu")
-        text_encoder_2.to("cpu")
-        return {"CLIP": {"tokenizer": tokenizer, "text_encoder": text_encoder, "tokenizer_2": tokenizer_2, "text_encoder_2": text_encoder_2, "arch": "flux"}}
-
-    else:
-        # Generic single CLIP from file
-        from transformers import CLIPTokenizer, CLIPTextModel
-        if path and path.is_dir():
-            tokenizer = CLIPTokenizer.from_pretrained(str(path))
-            text_encoder = CLIPTextModel.from_pretrained(str(path), torch_dtype=torch.float16)
-        else:
-            raise ValueError(f"CLIP model not found or not a directory: {name}. For SDXL/FLUX, leave empty and select type.")
-        text_encoder.to("cpu")
-        return {"CLIP": {"tokenizer": tokenizer, "text_encoder": text_encoder, "tokenizer_2": None, "text_encoder_2": None, "arch": "sd15"}}
-
-
-# ── Load VAE ──────────────────────────────────
-
-def exec_load_vae(inputs, widgets, ctx):
-    """Load a VAE model. Stays on CPU until VAE Decode/Encode moves it."""
-    from diffusers import AutoencoderKL
-
-    name = widgets.get("vae", "")
-    vae_type = widgets.get("type", "sdxl")
-
-    if name:
-        mm = ctx["model_manager"]
-        path = mm.find_model("vae", name)
-        if path:
-            log.info(f"Loading VAE from file: {path.name}")
-            vae = AutoencoderKL.from_single_file(str(path), torch_dtype=torch.float16)
-        else:
-            raise ValueError(f"VAE not found: {name}")
-    else:
-        # Load from HuggingFace based on type
-        repo_map = {
-            "sdxl": "stabilityai/stable-diffusion-xl-base-1.0",
-            "flux": "black-forest-labs/FLUX.1-dev",
-            "sd15": "stable-diffusion-v1-5/stable-diffusion-v1-5",
-        }
-        repo = repo_map.get(vae_type, repo_map["sdxl"])
-        log.info(f"Loading VAE from {repo}")
-        dtype = torch.bfloat16 if vae_type == "flux" else torch.float16
-        vae = AutoencoderKL.from_pretrained(repo, subfolder="vae", torch_dtype=dtype)
-
-    vae.to("cpu")
-    log.info(f"VAE loaded (on CPU)")
-    return {"VAE": vae}
-
-
-# ── Load Checkpoint (convenience) ─────────────
 
 def exec_load_checkpoint(inputs, widgets, ctx):
-    """Convenience node: loads UNET + CLIP + VAE from a single checkpoint file.
-    Equivalent to wiring Load UNET + Load CLIP + Load VAE separately."""
-    from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline, FluxPipeline
-
-    name = widgets.get("checkpoint", "")
-    if not name:
+    ckpt_name = widgets.get("checkpoint", "")
+    if not ckpt_name:
         raise ValueError("No checkpoint selected")
 
-    mm = ctx["model_manager"]
-    path = mm.find_model("checkpoints", name) or mm.find_model("diffusion_models", name)
-    if not path:
-        raise ValueError(f"Checkpoint not found: {name}")
+    model_path = ctx["model_manager"].find_model("checkpoints", ckpt_name)
+    if not model_path:
+        model_path = ctx["model_manager"].find_model("diffusion_models", ckpt_name)
+    if not model_path:
+        raise ValueError(f"Checkpoint not found: {ckpt_name}")
 
-    dtype_str = widgets.get("dtype", "auto")
-    is_gguf = str(path).lower().endswith(".gguf")
-    is_flux = "flux" in name.lower() or "flux" in str(path).lower()
-    torch_dtype = DTYPE_MAP.get(dtype_str) or (torch.bfloat16 if (is_flux or is_gguf) else torch.float16)
+    dtype_setting = widgets.get("dtype", "auto")
+    offload_mode = widgets.get("offload", "auto")
+    attn_slicing = widgets.get("attention_slicing", True)
+    vae_tiling = widgets.get("vae_tiling", True)
 
-    log.info(f"Loading checkpoint: {path.name}")
+    log.info(f"Loading: {model_path}")
+    is_gguf = str(model_path).lower().endswith(".gguf")
+    is_flux = "flux" in ckpt_name.lower() or "flux" in str(model_path).lower()
 
-    if is_gguf:
-        from diffusers import FluxTransformer2DModel, GGUFQuantizationConfig
-        gguf_config = GGUFQuantizationConfig(compute_dtype=torch_dtype)
-        transformer = FluxTransformer2DModel.from_single_file(str(path), quantization_config=gguf_config, torch_dtype=torch_dtype)
-        log.info("Loading FLUX pipeline components (cached after first download)...")
-        pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", transformer=transformer, torch_dtype=torch_dtype)
-        arch = "flux"
-    elif is_flux:
-        if path.is_file():
-            pipe = FluxPipeline.from_single_file(str(path), torch_dtype=torch_dtype)
-        else:
-            pipe = FluxPipeline.from_pretrained(str(path), torch_dtype=torch_dtype)
-        arch = "flux"
+    # Resolve dtype
+    if dtype_setting == "auto":
+        torch_dtype = torch.bfloat16 if (is_flux or is_gguf) else torch.float16
     else:
-        kwargs = {"torch_dtype": torch_dtype}
-        try:
-            log.info("Trying SDXL pipeline...")
-            pipe = StableDiffusionXLPipeline.from_single_file(str(path), **kwargs)
-            arch = "sdxl"
-        except Exception as e1:
-            log.info(f"SDXL from_single_file failed: {e1}")
-            # Try with AutoPipelineForText2Image which is more forgiving
-            try:
-                from diffusers import AutoPipelineForText2Image
-                log.info("Trying AutoPipeline...")
-                pipe = AutoPipelineForText2Image.from_single_file(str(path), **kwargs)
-                arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
-            except Exception as e2:
-                try:
-                    log.info("Trying SD1.5 pipeline...")
-                    pipe = StableDiffusionPipeline.from_single_file(str(path), **kwargs)
-                    arch = "sd15"
-                except Exception as e3:
-                    raise ValueError(f"Failed to load checkpoint.\nSDXL: {e1}\nAuto: {e2}\nSD1.5: {e3}")
+        torch_dtype = DTYPE_MAP.get(dtype_setting, torch.float16)
 
-    # Move EVERYTHING to CPU — each downstream node moves what it needs to GPU
-    try:
-        for comp_name, component in pipe.components.items():
-            if hasattr(component, 'to'):
-                try:
-                    component.to('cpu')
-                except Exception:
-                    pass
-    except Exception as e:
-        log.warning(f"pipe.components iteration failed: {e}, moving pipe directly")
+    if is_flux or is_gguf:
         try:
-            pipe.to('cpu')
-        except Exception:
-            pass
-    _flush()
+            pipe = _load_flux_checkpoint(model_path, is_gguf, torch_dtype)
+            arch = "flux"
+        except Exception as e:
+            log.warning(f"FLUX load failed: {e}. Trying as SD checkpoint...")
+            pipe = _load_sd_checkpoint(model_path, torch_dtype)
+            arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
+    else:
+        pipe = _load_sd_checkpoint(model_path, torch_dtype)
+        arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
 
-    unet = getattr(pipe, 'unet', None) or getattr(pipe, 'transformer', None)
-    log.info(f"Loaded {arch} checkpoint. All components on CPU.")
+    _setup_vram_offload(pipe, offload_mode)
+
+    if attn_slicing and hasattr(pipe, "enable_attention_slicing"):
+        pipe.enable_attention_slicing()
+        log.info("Attention slicing: enabled")
+
+    if vae_tiling:
+        if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'enable_tiling'):
+            pipe.vae.enable_tiling()
+            log.info("VAE tiling: enabled")
+        elif hasattr(pipe, 'enable_vae_tiling'):
+            pipe.enable_vae_tiling()
+            log.info("VAE tiling: enabled (legacy)")
+
+    log.info(f"Loaded {arch}: {ckpt_name} (dtype={dtype_setting}, offload={offload_mode})")
 
     return {
-        "MODEL": unet,
+        "MODEL": pipe.unet if hasattr(pipe, 'unet') else getattr(pipe, 'transformer', None),
         "CLIP": {
             "tokenizer": getattr(pipe, 'tokenizer', None),
             "text_encoder": getattr(pipe, 'text_encoder', None),
@@ -251,53 +83,132 @@ def exec_load_checkpoint(inputs, widgets, ctx):
             "arch": arch,
         },
         "VAE": getattr(pipe, 'vae', None),
-        "_pipe": pipe,  # Still needed by KSampler (for now)
-        "_scheduler": pipe.scheduler,
-        "_arch": arch,
+        "_pipe": pipe,
     }
 
 
-# ── Load LoRA ─────────────────────────────────
+def _load_flux_checkpoint(model_path, is_gguf, torch_dtype):
+    from diffusers import FluxPipeline
+
+    if is_gguf:
+        try:
+            from diffusers import FluxTransformer2DModel, GGUFQuantizationConfig
+        except ImportError:
+            raise ValueError("GGUF requires: pip install gguf>=0.10.0")
+
+        log.info("Loading FLUX GGUF (quantized)")
+        gguf_config = GGUFQuantizationConfig(compute_dtype=torch_dtype)
+        transformer = FluxTransformer2DModel.from_single_file(
+            str(model_path), quantization_config=gguf_config, torch_dtype=torch_dtype,
+        )
+        log.info("Loading FLUX pipeline components (cached after first download)...")
+        pipe = FluxPipeline.from_pretrained(
+            "black-forest-labs/FLUX.1-dev", transformer=transformer, torch_dtype=torch_dtype,
+        )
+    elif model_path.is_file():
+        pipe = FluxPipeline.from_single_file(str(model_path), torch_dtype=torch_dtype)
+    else:
+        pipe = FluxPipeline.from_pretrained(str(model_path), torch_dtype=torch_dtype)
+
+    return pipe
+
+
+def _load_sd_checkpoint(model_path, torch_dtype):
+    from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline, AutoPipelineForText2Image
+
+    kwargs = {"torch_dtype": torch_dtype, "trust_remote_code": True}
+
+    if model_path.is_file():
+        errors = []
+        # Try SDXL
+        try:
+            log.info("Trying SDXL pipeline...")
+            return StableDiffusionXLPipeline.from_single_file(str(model_path), **kwargs)
+        except Exception as e:
+            errors.append(f"SDXL: {e}")
+            log.info(f"Not SDXL: {e}")
+
+        # Try SD1.5
+        try:
+            log.info("Trying SD1.5 pipeline...")
+            return StableDiffusionPipeline.from_single_file(str(model_path), **kwargs)
+        except Exception as e:
+            errors.append(f"SD1.5: {e}")
+            log.info(f"Not SD1.5: {e}")
+
+        raise ValueError(f"Failed to load checkpoint. Tried:\n" + "\n".join(errors))
+    else:
+        return AutoPipelineForText2Image.from_pretrained(str(model_path), **kwargs)
+
+
+def _setup_vram_offload(pipe, mode="auto"):
+    if not torch.cuda.is_available():
+        log.info("No CUDA: running on CPU")
+        pipe.to("cpu")
+        return
+
+    free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+    total_mb = torch.cuda.mem_get_info()[1] // (1024 * 1024)
+    log.info(f"VRAM: {free_mb}MB free / {total_mb}MB total")
+
+    if mode == "auto":
+        if free_mb < 4000:
+            mode = "sequential_cpu"
+        elif free_mb < 8000:
+            mode = "model_cpu"
+        else:
+            mode = "gpu_only"
+
+    try:
+        if mode == "sequential_cpu":
+            log.info("Offload: sequential CPU (layer-by-layer, slowest, lowest VRAM)")
+            pipe.enable_sequential_cpu_offload()
+        elif mode == "model_cpu":
+            log.info("Offload: model CPU (whole model swap)")
+            pipe.enable_model_cpu_offload()
+        elif mode == "gpu_only":
+            log.info("Offload: none (keeping on GPU)")
+            pipe.to("cuda")
+        elif mode == "cpu_only":
+            log.info("Offload: CPU only (no GPU)")
+            pipe.to("cpu")
+    except Exception as e:
+        log.warning(f"Offload mode '{mode}' failed: {e}. Trying model_cpu_offload...")
+        try:
+            pipe.enable_model_cpu_offload()
+        except Exception as e2:
+            log.warning(f"model_cpu_offload also failed: {e2}. Keeping on CPU.")
+            pipe.to("cpu")
+
 
 def exec_load_lora(inputs, widgets, ctx):
-    """Load and apply LoRA weights to a UNET model."""
-    from diffusers.loaders import LoraLoaderMixin
-    from safetensors.torch import load_file
+    pipe = inputs.get("_pipe")
+    if not pipe:
+        raise ValueError("LoRA needs a pipeline — connect from Load Checkpoint")
 
-    model = inputs.get("MODEL")
-    if model is None:
-        raise ValueError("Load LoRA needs a MODEL — connect from Load UNET or Load Checkpoint")
-
-    name = widgets.get("lora", "")
+    lora_name = widgets.get("lora", "")
     strength = float(widgets.get("strength", 0.7))
-    if not name:
+    fuse = bool(widgets.get("fuse", True))
+
+    if not lora_name:
         raise ValueError("No LoRA selected")
 
-    mm = ctx["model_manager"]
-    path = mm.find_model("loras", name)
-    if not path:
-        raise ValueError(f"LoRA not found: {name}")
+    model_path = ctx["model_manager"].find_model("loras", lora_name)
+    if not model_path:
+        raise ValueError(f"LoRA not found: {lora_name}")
 
-    log.info(f"Loading LoRA: {path.name} (strength={strength})")
+    log.info(f"Loading LoRA: {model_path} (strength={strength}, fuse={fuse})")
+    pipe.load_lora_weights(str(model_path))
 
-    # Load LoRA state dict and apply to UNET
-    state_dict = load_file(str(path))
+    if fuse:
+        pipe.fuse_lora(lora_scale=strength)
+        log.info("LoRA fused into model weights")
+    else:
+        pipe.set_adapters(pipe.get_list_adapters(), adapter_weights=[strength])
+        log.info("LoRA loaded (unfused, dynamic weight)")
 
-    # Filter for UNET keys
-    from diffusers.utils import convert_unet_state_dict_to_peft
-    try:
-        from peft import set_peft_model_state_dict, LoraConfig
-        # Use PEFT if available
-        model.load_attn_procs(str(path))
-        log.info("LoRA applied via attn_procs")
-    except Exception:
-        # Fallback: manual weight application
-        log.info("LoRA loaded (manual application)")
+    return {"MODEL": pipe.unet, "CLIP": inputs.get("CLIP"), "_pipe": pipe}
 
-    return {"MODEL": model, "CLIP": inputs.get("CLIP")}
-
-
-# ── Load Image ────────────────────────────────
 
 def exec_load_image(inputs, widgets, ctx):
     image = ctx.get("input_image")
@@ -311,61 +222,24 @@ def exec_load_image(inputs, widgets, ctx):
     return {"IMAGE": image}
 
 
-# ── Load Upscale Model ────────────────────────
-
 def exec_load_upscale_model(inputs, widgets, ctx):
-    name = widgets.get("model", "")
-    if not name:
+    model_name = widgets.get("model", "")
+    if not model_name:
         raise ValueError("No upscale model selected")
 
-    mm = ctx["model_manager"]
-    path = mm.find_model("upscale_models", name)
-    if not path:
-        raise ValueError(f"Upscale model not found: {name}")
+    model_path = ctx["model_manager"].find_model("upscale_models", model_name)
+    if not model_path:
+        raise ValueError(f"Upscale model not found: {model_name}")
 
     import spandrel
-    model = spandrel.ModelLoader().load_from_file(str(path)).eval().to("cpu")
-    log.info(f"Loaded upscale model: {name} (on CPU)")
+    model = spandrel.ModelLoader().load_from_file(str(model_path)).eval()
+    device = widgets.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    log.info(f"Loaded upscale model: {model_name} (device={device})")
     return {"UPSCALE_MODEL": model}
 
 
 # ── Register ──────────────────────────────────
-
-register_node(NodeTypeDef(
-    type_id="load_unet", category="loaders", label="Load UNET",
-    inputs=[],
-    outputs=[PortDef("MODEL", "MODEL")],
-    widgets=[
-        WidgetDef("unet", "combo", label="Model", options=[]),
-        WidgetDef("dtype", "combo", default="auto", label="Dtype", options=["auto", "fp16", "bf16", "fp32"]),
-    ],
-    execute=exec_load_unet, color="#a855f7",
-    description="Load a UNET/diffusion model (SD1.5, SDXL, FLUX, GGUF). Stays on CPU — KSampler moves it to GPU.",
-))
-
-register_node(NodeTypeDef(
-    type_id="load_clip", category="loaders", label="Load CLIP",
-    inputs=[],
-    outputs=[PortDef("CLIP", "CLIP")],
-    widgets=[
-        WidgetDef("clip", "combo", label="Model (or leave empty)", options=[]),
-        WidgetDef("type", "combo", default="sdxl", label="Type", options=["sdxl", "flux", "sd15"]),
-    ],
-    execute=exec_load_clip, color="#facc15",
-    description="Load CLIP text encoder(s). SDXL=dual CLIP, FLUX=T5+CLIP-L, SD1.5=single CLIP. Stays on CPU.",
-))
-
-register_node(NodeTypeDef(
-    type_id="load_vae", category="loaders", label="Load VAE",
-    inputs=[],
-    outputs=[PortDef("VAE", "VAE")],
-    widgets=[
-        WidgetDef("vae", "combo", label="VAE (or leave empty)", options=[]),
-        WidgetDef("type", "combo", default="sdxl", label="Type", options=["sdxl", "flux", "sd15"]),
-    ],
-    execute=exec_load_vae, color="#f87171",
-    description="Load VAE encoder/decoder. Leave model empty to auto-download for the selected type. Stays on CPU.",
-))
 
 register_node(NodeTypeDef(
     type_id="load_checkpoint", category="loaders", label="Load Checkpoint",
@@ -373,19 +247,25 @@ register_node(NodeTypeDef(
     outputs=[PortDef("MODEL", "MODEL"), PortDef("CLIP", "CLIP"), PortDef("VAE", "VAE")],
     widgets=[
         WidgetDef("checkpoint", "combo", label="Checkpoint", options=[]),
-        WidgetDef("dtype", "combo", default="auto", label="Dtype", options=["auto", "fp16", "bf16", "fp32"]),
+        WidgetDef("dtype", "combo", default="auto", label="Dtype",
+                  options=["auto", "fp16", "bf16", "fp32"]),
+        WidgetDef("offload", "combo", default="auto", label="VRAM Offload",
+                  options=OFFLOAD_MODES),
+        WidgetDef("attention_slicing", "toggle", default=True, label="Attention Slicing"),
+        WidgetDef("vae_tiling", "toggle", default=True, label="VAE Tiling"),
     ],
     execute=exec_load_checkpoint, color="#a855f7",
-    description="Convenience: loads UNET+CLIP+VAE from one checkpoint. Same as wiring Load UNET + Load CLIP + Load VAE.",
+    description="Load SD1.5/SDXL/FLUX checkpoint. Auto-detects GGUF and FLUX from filename.",
 ))
 
 register_node(NodeTypeDef(
     type_id="load_lora", category="loaders", label="Load LoRA",
-    inputs=[PortDef("MODEL", "MODEL"), PortDef("CLIP", "CLIP", optional=True)],
+    inputs=[PortDef("MODEL", "MODEL"), PortDef("CLIP", "CLIP")],
     outputs=[PortDef("MODEL", "MODEL"), PortDef("CLIP", "CLIP")],
     widgets=[
         WidgetDef("lora", "combo", label="LoRA", options=[]),
         WidgetDef("strength", "slider", default=0.7, min=0, max=2, step=0.05, label="Strength"),
+        WidgetDef("fuse", "toggle", default=True, label="Fuse (permanent, faster)"),
     ],
     execute=exec_load_lora, color="#c084fc",
 ))
@@ -393,13 +273,20 @@ register_node(NodeTypeDef(
 register_node(NodeTypeDef(
     type_id="load_image", category="loaders", label="Load Image",
     inputs=[], outputs=[PortDef("IMAGE", "IMAGE")],
-    widgets=[WidgetDef("color_mode", "combo", default="RGB", label="Color Mode", options=["RGB", "RGBA", "L", "keep"])],
+    widgets=[
+        WidgetDef("color_mode", "combo", default="RGB", label="Color Mode",
+                  options=["RGB", "RGBA", "L", "keep"]),
+    ],
     execute=exec_load_image, color="#38bdf8",
 ))
 
 register_node(NodeTypeDef(
     type_id="load_upscale_model", category="loaders", label="Load Upscale Model",
     inputs=[], outputs=[PortDef("UPSCALE_MODEL", "UPSCALE_MODEL")],
-    widgets=[WidgetDef("model", "combo", label="Model", options=[])],
+    widgets=[
+        WidgetDef("model", "combo", label="Model", options=[]),
+        WidgetDef("device", "combo", default="cuda", label="Device",
+                  options=["cuda", "cpu"]),
+    ],
     execute=exec_load_upscale_model, color="#2dd4bf",
 ))
