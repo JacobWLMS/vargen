@@ -307,27 +307,53 @@ function onStartConnect(nodeId: string, portName: string, e: MouseEvent) {
   connectMouse.y = node.y + 40
 }
 
+// Port position calculation
+function getOutputPortPos(nodeId: string, portName: string): { x: number; y: number } {
+  const node = store.nodeById(nodeId)
+  if (!node) return { x: 0, y: 0 }
+  const def = store.nodeTypes[node.type]
+  const outputs = def?.outputs || []
+  const portIndex = outputs.findIndex((p: any) => p.name === portName)
+  const idx = portIndex >= 0 ? portIndex : 0
+  // Ports start ~40px from top, spaced 20px apart
+  return { x: node.x + 225, y: node.y + 42 + idx * 20 }
+}
+
+function getInputPortPos(nodeId: string, portName: string): { x: number; y: number } {
+  const node = store.nodeById(nodeId)
+  if (!node) return { x: 0, y: 0 }
+  const def = store.nodeTypes[node.type]
+  const inputs = def?.inputs || []
+  const portIndex = inputs.findIndex((p: any) => p.name === portName)
+  const idx = portIndex >= 0 ? portIndex : 0
+  return { x: node.x - 5, y: node.y + 42 + idx * 20 }
+}
+
 // Edge rendering
 function edgePath(edge: GraphEdge): string {
-  const from = store.nodeById(edge.from)
-  const to = store.nodeById(edge.to)
-  if (!from || !to) return ''
+  const from = getOutputPortPos(edge.from, edge.param)
+  // Find the matching input port by type
+  const sourceNode = store.nodeById(edge.from)
+  const targetNode = store.nodeById(edge.to)
+  if (!sourceNode || !targetNode) return ''
 
-  const x1 = from.x + 220 // right side of node
-  const y1 = from.y + 50  // vertical center (approx)
-  const x2 = to.x          // left side of node
-  const y2 = to.y + 50
-  const cpx = Math.max(Math.abs(x2 - x1) * 0.4, 50)
-  return `M ${x1} ${y1} C ${x1 + cpx} ${y1}, ${x2 - cpx} ${y2}, ${x2} ${y2}`
+  const sourceDef = store.nodeTypes[sourceNode.type]
+  const targetDef = store.nodeTypes[targetNode.type]
+  const sourcePort = sourceDef?.outputs?.find((p: any) => p.name === edge.param)
+  const targetPort = targetDef?.inputs?.find((p: any) => p.type === sourcePort?.type)
+
+  const to = targetPort
+    ? getInputPortPos(edge.to, targetPort.name)
+    : { x: targetNode.x - 5, y: targetNode.y + 42 }
+
+  const cpx = Math.max(Math.abs(to.x - from.x) * 0.4, 60)
+  return `M ${from.x} ${from.y} C ${from.x + cpx} ${from.y}, ${to.x - cpx} ${to.y}, ${to.x} ${to.y}`
 }
 
 const connectingPath = computed(() => {
-  const from = store.nodeById(connectFrom.value)
-  if (!from) return ''
-  const x1 = from.x + 220
-  const y1 = from.y + 50
-  const cpx = Math.max(Math.abs(connectMouse.x - x1) * 0.4, 50)
-  return `M ${x1} ${y1} C ${x1 + cpx} ${y1}, ${connectMouse.x - cpx} ${connectMouse.y}, ${connectMouse.x} ${connectMouse.y}`
+  const from = getOutputPortPos(connectFrom.value, connectFromPort.value)
+  const cpx = Math.max(Math.abs(connectMouse.x - from.x) * 0.4, 60)
+  return `M ${from.x} ${from.y} C ${from.x + cpx} ${from.y}, ${connectMouse.x - cpx} ${connectMouse.y}, ${connectMouse.x} ${connectMouse.y}`
 })
 
 function edgeColor(edge: GraphEdge): string {
