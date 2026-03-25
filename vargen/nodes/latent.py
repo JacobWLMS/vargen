@@ -49,9 +49,10 @@ def exec_vae_decode(inputs, widgets, ctx):
     if tiled and hasattr(vae, 'disable_tiling'):
         vae.disable_tiling()
 
-    vae.to("cpu")
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    if not widgets.get("keep_on_gpu", False):
+        vae.to("cpu")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Tensor → PIL
     decoded = (decoded / 2 + 0.5).clamp(0, 1)
@@ -106,6 +107,7 @@ register_node(NodeTypeDef(
     outputs=[PortDef("IMAGE", "IMAGE")],
     widgets=[
         WidgetDef("tiled", "toggle", default=False, label="Tiled (low VRAM)"),
+        WidgetDef("keep_on_gpu", "toggle", default=False, label="Keep VAE on GPU"),
     ],
     execute=exec_vae_decode, color="#f87171",
     description="Decode latent to image using VAE",

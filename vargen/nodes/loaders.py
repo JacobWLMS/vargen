@@ -9,6 +9,15 @@ from . import register_node, NodeTypeDef, PortDef, WidgetDef
 
 log = logging.getLogger(__name__)
 
+DTYPE_MAP = {
+    "auto": None,
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+    "fp32": torch.float32,
+}
+
+OFFLOAD_MODES = ["auto", "sequential_cpu", "model_cpu", "gpu_only", "cpu_only"]
+
 
 def exec_load_checkpoint(inputs, widgets, ctx):
     ckpt_name = widgets.get("checkpoint", "")
@@ -21,73 +30,84 @@ def exec_load_checkpoint(inputs, widgets, ctx):
     if not model_path:
         raise ValueError(f"Checkpoint not found: {ckpt_name}")
 
+    dtype_setting = widgets.get("dtype", "auto")
+    offload_mode = widgets.get("offload", "auto")
+    attn_slicing = widgets.get("attention_slicing", True)
+    vae_tiling = widgets.get("vae_tiling", True)
+
     log.info(f"Loading: {model_path}")
     is_gguf = str(model_path).lower().endswith(".gguf")
     is_flux = "flux" in ckpt_name.lower() or "flux" in str(model_path).lower()
 
-    # FLUX models (including GGUF)
+    # Resolve dtype
+    if dtype_setting == "auto":
+        torch_dtype = torch.bfloat16 if (is_flux or is_gguf) else torch.float16
+    else:
+        torch_dtype = DTYPE_MAP.get(dtype_setting, torch.float16)
+
     if is_flux or is_gguf:
-        pipe = _load_flux_checkpoint(model_path, is_gguf, ctx.get("model_manager"))
+        pipe = _load_flux_checkpoint(model_path, is_gguf, torch_dtype)
         arch = "flux"
     else:
-        pipe = _load_sd_checkpoint(model_path)
+        pipe = _load_sd_checkpoint(model_path, torch_dtype)
         arch = "sdxl" if hasattr(pipe, 'text_encoder_2') else "sd15"
 
-    # VRAM management
-    _setup_vram_offload(pipe)
+    _setup_vram_offload(pipe, offload_mode)
 
-    log.info(f"Loaded {arch}: {ckpt_name}")
+    if attn_slicing and hasattr(pipe, "enable_attention_slicing"):
+        pipe.enable_attention_slicing()
+        log.info("Attention slicing: enabled")
 
-    # Return individual components
+    if vae_tiling and hasattr(pipe, 'enable_vae_tiling'):
+        pipe.enable_vae_tiling()
+        log.info("VAE tiling: enabled")
+
+    log.info(f"Loaded {arch}: {ckpt_name} (dtype={dtype_setting}, offload={offload_mode})")
+
     return {
-        "MODEL": pipe.unet,
+        "MODEL": pipe.unet if hasattr(pipe, 'unet') else getattr(pipe, 'transformer', None),
         "CLIP": {
-            "tokenizer": pipe.tokenizer,
-            "text_encoder": pipe.text_encoder,
+            "tokenizer": getattr(pipe, 'tokenizer', None),
+            "text_encoder": getattr(pipe, 'text_encoder', None),
             "tokenizer_2": getattr(pipe, "tokenizer_2", None),
             "text_encoder_2": getattr(pipe, "text_encoder_2", None),
             "arch": arch,
         },
-        "VAE": pipe.vae,
+        "VAE": getattr(pipe, 'vae', None),
         "_pipe": pipe,
     }
 
 
-def _load_flux_checkpoint(model_path, is_gguf, model_manager=None):
-    """Load FLUX model — handles GGUF, safetensors, and HF repo."""
+def _load_flux_checkpoint(model_path, is_gguf, torch_dtype):
     from diffusers import FluxPipeline
 
     if is_gguf:
         try:
             from diffusers import FluxTransformer2DModel, GGUFQuantizationConfig
         except ImportError:
-            raise ValueError(
-                "GGUF support requires: pip install gguf>=0.10.0\n"
-                "Run: pip install gguf"
-            )
-        log.info("Loading FLUX GGUF (quantized)")
-        gguf_config = GGUFQuantizationConfig(compute_dtype=torch.bfloat16)
-        transformer = FluxTransformer2DModel.from_single_file(
-            str(model_path), quantization_config=gguf_config, torch_dtype=torch.bfloat16,
-        )
+            raise ValueError("GGUF requires: pip install gguf>=0.10.0")
 
+        log.info("Loading FLUX GGUF (quantized)")
+        gguf_config = GGUFQuantizationConfig(compute_dtype=torch_dtype)
+        transformer = FluxTransformer2DModel.from_single_file(
+            str(model_path), quantization_config=gguf_config, torch_dtype=torch_dtype,
+        )
         log.info("Loading FLUX pipeline components (cached after first download)...")
         pipe = FluxPipeline.from_pretrained(
-            "black-forest-labs/FLUX.1-dev", transformer=transformer, torch_dtype=torch.bfloat16,
+            "black-forest-labs/FLUX.1-dev", transformer=transformer, torch_dtype=torch_dtype,
         )
     elif model_path.is_file():
-        pipe = FluxPipeline.from_single_file(str(model_path), torch_dtype=torch.bfloat16)
+        pipe = FluxPipeline.from_single_file(str(model_path), torch_dtype=torch_dtype)
     else:
-        pipe = FluxPipeline.from_pretrained(str(model_path), torch_dtype=torch.bfloat16)
+        pipe = FluxPipeline.from_pretrained(str(model_path), torch_dtype=torch_dtype)
 
     return pipe
 
 
-def _load_sd_checkpoint(model_path):
-    """Load SD1.5/SDXL checkpoint — tries SDXL first, falls back to SD1.5."""
+def _load_sd_checkpoint(model_path, torch_dtype):
     from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline, AutoPipelineForText2Image
 
-    kwargs = {"torch_dtype": torch.float16, "trust_remote_code": True}
+    kwargs = {"torch_dtype": torch_dtype, "trust_remote_code": True}
 
     if model_path.is_file():
         try:
@@ -96,44 +116,52 @@ def _load_sd_checkpoint(model_path):
             try:
                 return StableDiffusionPipeline.from_single_file(str(model_path), **kwargs)
             except Exception as e:
-                raise ValueError(f"Failed to load checkpoint as SD1.5 or SDXL: {e}")
+                raise ValueError(f"Failed to load as SD1.5 or SDXL: {e}")
     else:
         return AutoPipelineForText2Image.from_pretrained(str(model_path), **kwargs)
 
 
-def _setup_vram_offload(pipe):
-    """Configure VRAM offloading based on available memory."""
-    if torch.cuda.is_available():
-        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-        total_mb = torch.cuda.mem_get_info()[1] // (1024 * 1024)
-        log.info(f"VRAM: {free_mb}MB free / {total_mb}MB total")
-
-        if free_mb < 4000:
-            log.info("Very low VRAM (<4GB): sequential CPU offload")
-            pipe.enable_sequential_cpu_offload()
-        elif free_mb < 8000:
-            log.info("Low VRAM (<8GB): model CPU offload")
-            pipe.enable_model_cpu_offload()
-        else:
-            log.info("Sufficient VRAM: keeping on GPU")
-            pipe.to("cuda")
-    else:
+def _setup_vram_offload(pipe, mode="auto"):
+    if not torch.cuda.is_available():
         log.info("No CUDA: running on CPU")
         pipe.to("cpu")
+        return
 
-    if hasattr(pipe, "enable_attention_slicing"):
-        pipe.enable_attention_slicing()
-    if hasattr(pipe, 'enable_vae_tiling'):
-        pipe.enable_vae_tiling()
+    free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+    total_mb = torch.cuda.mem_get_info()[1] // (1024 * 1024)
+    log.info(f"VRAM: {free_mb}MB free / {total_mb}MB total")
+
+    if mode == "auto":
+        if free_mb < 4000:
+            mode = "sequential_cpu"
+        elif free_mb < 8000:
+            mode = "model_cpu"
+        else:
+            mode = "gpu_only"
+
+    if mode == "sequential_cpu":
+        log.info("Offload: sequential CPU (layer-by-layer, slowest, lowest VRAM)")
+        pipe.enable_sequential_cpu_offload()
+    elif mode == "model_cpu":
+        log.info("Offload: model CPU (whole model swap)")
+        pipe.enable_model_cpu_offload()
+    elif mode == "gpu_only":
+        log.info("Offload: none (keeping on GPU)")
+        pipe.to("cuda")
+    elif mode == "cpu_only":
+        log.info("Offload: CPU only (no GPU)")
+        pipe.to("cpu")
 
 
 def exec_load_lora(inputs, widgets, ctx):
     pipe = inputs.get("_pipe")
     if not pipe:
-        raise ValueError("LoRA needs a pipeline — connect to Load Checkpoint")
+        raise ValueError("LoRA needs a pipeline — connect from Load Checkpoint")
 
     lora_name = widgets.get("lora", "")
-    strength = widgets.get("strength", 0.7)
+    strength = float(widgets.get("strength", 0.7))
+    fuse = bool(widgets.get("fuse", True))
+
     if not lora_name:
         raise ValueError("No LoRA selected")
 
@@ -141,15 +169,17 @@ def exec_load_lora(inputs, widgets, ctx):
     if not model_path:
         raise ValueError(f"LoRA not found: {lora_name}")
 
-    log.info(f"Loading LoRA: {model_path} (strength: {strength})")
+    log.info(f"Loading LoRA: {model_path} (strength={strength}, fuse={fuse})")
     pipe.load_lora_weights(str(model_path))
-    pipe.fuse_lora(lora_scale=strength)
 
-    return {
-        "MODEL": pipe.unet,
-        "CLIP": inputs.get("CLIP"),
-        "_pipe": pipe,
-    }
+    if fuse:
+        pipe.fuse_lora(lora_scale=strength)
+        log.info("LoRA fused into model weights")
+    else:
+        pipe.set_adapters(pipe.get_list_adapters(), adapter_weights=[strength])
+        log.info("LoRA loaded (unfused, dynamic weight)")
+
+    return {"MODEL": pipe.unet, "CLIP": inputs.get("CLIP"), "_pipe": pipe}
 
 
 def exec_load_image(inputs, widgets, ctx):
@@ -157,7 +187,10 @@ def exec_load_image(inputs, widgets, ctx):
     if image is None:
         raise ValueError("No input image — upload one to the Load Image node")
     if not isinstance(image, Image.Image):
-        image = Image.open(image).convert("RGB")
+        image = Image.open(image)
+    color_mode = widgets.get("color_mode", "RGB")
+    if color_mode != "keep":
+        image = image.convert(color_mode)
     return {"IMAGE": image}
 
 
@@ -172,9 +205,9 @@ def exec_load_upscale_model(inputs, widgets, ctx):
 
     import spandrel
     model = spandrel.ModelLoader().load_from_file(str(model_path)).eval()
-    if torch.cuda.is_available():
-        model = model.cuda()
-    log.info(f"Loaded upscale model: {model_name}")
+    device = widgets.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    log.info(f"Loaded upscale model: {model_name} (device={device})")
     return {"UPSCALE_MODEL": model}
 
 
@@ -184,9 +217,17 @@ register_node(NodeTypeDef(
     type_id="load_checkpoint", category="loaders", label="Load Checkpoint",
     inputs=[],
     outputs=[PortDef("MODEL", "MODEL"), PortDef("CLIP", "CLIP"), PortDef("VAE", "VAE")],
-    widgets=[WidgetDef("checkpoint", "combo", label="Checkpoint", options=[])],
+    widgets=[
+        WidgetDef("checkpoint", "combo", label="Checkpoint", options=[]),
+        WidgetDef("dtype", "combo", default="auto", label="Dtype",
+                  options=["auto", "fp16", "bf16", "fp32"]),
+        WidgetDef("offload", "combo", default="auto", label="VRAM Offload",
+                  options=OFFLOAD_MODES),
+        WidgetDef("attention_slicing", "toggle", default=True, label="Attention Slicing"),
+        WidgetDef("vae_tiling", "toggle", default=True, label="VAE Tiling"),
+    ],
     execute=exec_load_checkpoint, color="#a855f7",
-    description="Load a Stable Diffusion / SDXL checkpoint",
+    description="Load SD1.5/SDXL/FLUX checkpoint. Auto-detects GGUF and FLUX from filename.",
 ))
 
 register_node(NodeTypeDef(
@@ -196,19 +237,28 @@ register_node(NodeTypeDef(
     widgets=[
         WidgetDef("lora", "combo", label="LoRA", options=[]),
         WidgetDef("strength", "slider", default=0.7, min=0, max=2, step=0.05, label="Strength"),
+        WidgetDef("fuse", "toggle", default=True, label="Fuse (permanent, faster)"),
     ],
     execute=exec_load_lora, color="#c084fc",
 ))
 
 register_node(NodeTypeDef(
     type_id="load_image", category="loaders", label="Load Image",
-    inputs=[], outputs=[PortDef("IMAGE", "IMAGE")], widgets=[],
+    inputs=[], outputs=[PortDef("IMAGE", "IMAGE")],
+    widgets=[
+        WidgetDef("color_mode", "combo", default="RGB", label="Color Mode",
+                  options=["RGB", "RGBA", "L", "keep"]),
+    ],
     execute=exec_load_image, color="#38bdf8",
 ))
 
 register_node(NodeTypeDef(
     type_id="load_upscale_model", category="loaders", label="Load Upscale Model",
     inputs=[], outputs=[PortDef("UPSCALE_MODEL", "UPSCALE_MODEL")],
-    widgets=[WidgetDef("model", "combo", label="Model", options=[])],
+    widgets=[
+        WidgetDef("model", "combo", label="Model", options=[]),
+        WidgetDef("device", "combo", default="cuda", label="Device",
+                  options=["cuda", "cpu"]),
+    ],
     execute=exec_load_upscale_model, color="#2dd4bf",
 ))

@@ -19,11 +19,23 @@ def exec_save_image(inputs, widgets, ctx):
     if image is None:
         raise ValueError("No image to save")
     prefix = widgets.get("filename_prefix", "vargen")
+    fmt = widgets.get("format", "png")
+    quality = int(widgets.get("quality", 95))
     ts = int(time.time())
     OUTPUT_DIR.mkdir(exist_ok=True)
-    path = OUTPUT_DIR / f"{prefix}_{ts}.png"
-    image.save(path)
-    log.info(f"Saved: {path}")
+
+    ext = {"png": ".png", "jpeg": ".jpg", "webp": ".webp"}[fmt]
+    path = OUTPUT_DIR / f"{prefix}_{ts}{ext}"
+
+    save_kwargs = {}
+    if fmt == "jpeg":
+        save_kwargs["quality"] = quality
+        image = image.convert("RGB")
+    elif fmt == "webp":
+        save_kwargs["quality"] = quality
+
+    image.save(path, **save_kwargs)
+    log.info(f"Saved: {path} ({fmt}, q={quality})")
     return {"IMAGE": image, "_saved_path": str(path), "_saved_url": f"/api/outputs/{path.name}"}
 
 
@@ -102,7 +114,11 @@ register_node(NodeTypeDef(
     type_id="save_image", category="image", label="Save Image",
     inputs=[PortDef("IMAGE", "IMAGE")],
     outputs=[PortDef("IMAGE", "IMAGE")],
-    widgets=[WidgetDef("filename_prefix", "text", default="vargen", label="Prefix")],
+    widgets=[
+        WidgetDef("filename_prefix", "text", default="vargen", label="Prefix"),
+        WidgetDef("format", "combo", default="png", label="Format", options=["png", "jpeg", "webp"]),
+        WidgetDef("quality", "slider", default=95, min=1, max=100, step=1, label="Quality (JPEG/WebP)"),
+    ],
     execute=exec_save_image, color="#4ade80",
     description="Save image to outputs directory",
 ))
