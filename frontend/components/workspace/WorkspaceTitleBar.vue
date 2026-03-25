@@ -97,7 +97,7 @@
     </div>
 
     <!-- Run / Cancel -->
-    <button v-if="!store.running" @click="store.run()" class="btn btn-primary flex items-center gap-1.5 px-3">
+    <button v-if="!store.running" @click="store.runGraph()" class="btn btn-primary flex items-center gap-1.5 px-3">
       <span class="text-[10px]">&#9654;</span> Run
     </button>
     <button v-else @click="store.cancel()" class="btn btn-danger px-3">

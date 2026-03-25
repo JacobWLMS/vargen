@@ -283,7 +283,7 @@ async def run_graph_ws(ws: WebSocket):
             # Check for saved images
             if "_saved_url" in result:
                 msg["image_url"] = result["_saved_url"]
-            elif isinstance(result.get("IMAGE"), Image):
+            elif result.get("IMAGE") is not None and hasattr(result["IMAGE"], "save"):
                 # Auto-save preview
                 ts = int(time.time())
                 path = OUTPUT_DIR / f"preview_{nid}_{ts}.png"
