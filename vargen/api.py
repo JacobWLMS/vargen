@@ -382,12 +382,21 @@ async def list_step_types():
 
 
 # ── Serve frontend in production ───────────────────────────────
+# Nuxt generate outputs to frontend/.output/public/
+# Mount AFTER all API routes so /api/* takes priority
 
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / ".output" / "public"
+FRONTEND_DIRS = [
+    Path(__file__).parent.parent / "frontend" / ".output" / "public",
+    Path(__file__).parent.parent / "frontend" / "dist",
+]
 
 
-def create_app():
-    """Create the app with optional frontend static serving."""
-    if FRONTEND_DIR.exists():
-        app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
-    return app
+@app.on_event("startup")
+def mount_frontend():
+    for d in FRONTEND_DIRS:
+        if d.exists():
+            app.mount("/", StaticFiles(directory=str(d), html=True), name="frontend")
+            log.info(f"Serving frontend from {d}")
+            break
+    else:
+        log.warning("No built frontend found. Run 'cd frontend && npx nuxt generate' to build.")
