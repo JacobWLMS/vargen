@@ -27,14 +27,18 @@ def exec_vae_decode(inputs, widgets, ctx):
     if latent is None:
         raise ValueError("VAE Decode needs LATENT — connect from KSampler")
 
-    log.info(f"VAE Decode: latent {latent.shape if hasattr(latent, 'shape') else type(latent)}")
+    tiled = bool(widgets.get("tiled", False))
+    log.info(f"VAE Decode: latent {latent.shape if hasattr(latent, 'shape') else type(latent)} (tiled={tiled})")
 
-    # Move VAE to GPU if available, then move latent to match
+    # Move VAE to GPU if available
     if torch.cuda.is_available():
         vae = vae.to("cuda")
         device = "cuda"
     else:
         device = next(vae.parameters()).device if hasattr(vae, 'parameters') else 'cpu'
+
+    if tiled and hasattr(vae, 'enable_tiling'):
+        vae.enable_tiling()
 
     with torch.no_grad():
         latent = latent.to(device=device, dtype=vae.dtype)
@@ -42,7 +46,9 @@ def exec_vae_decode(inputs, widgets, ctx):
             latent = latent / vae.config.scaling_factor
         decoded = vae.decode(latent, return_dict=False)[0]
 
-    # Move VAE back to CPU to free VRAM
+    if tiled and hasattr(vae, 'disable_tiling'):
+        vae.disable_tiling()
+
     vae.to("cpu")
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -98,7 +104,9 @@ register_node(NodeTypeDef(
     type_id="vae_decode", category="latent", label="VAE Decode",
     inputs=[PortDef("VAE", "VAE"), PortDef("LATENT", "LATENT")],
     outputs=[PortDef("IMAGE", "IMAGE")],
-    widgets=[],
+    widgets=[
+        WidgetDef("tiled", "toggle", default=False, label="Tiled (low VRAM)"),
+    ],
     execute=exec_vae_decode, color="#f87171",
     description="Decode latent to image using VAE",
 ))

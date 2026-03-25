@@ -28,6 +28,7 @@ from .nodes.executor import GraphExecutor, CancelledError as GraphCancelledError
 from .nodes import loaders, conditioning, sampling, latent as latent_nodes, image as image_nodes
 from .nodes import controlnet as controlnet_nodes, ipadapter as ipadapter_nodes
 from .nodes import inpaint as inpaint_nodes, flux as flux_nodes
+from .nodes import model_utils as model_utils_nodes
 
 log = logging.getLogger(__name__)
 

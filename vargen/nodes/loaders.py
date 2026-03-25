@@ -37,9 +37,27 @@ def exec_load_checkpoint(inputs, widgets, ctx):
             pipe = AutoPipelineForText2Image.from_pretrained(str(model_path), **kwargs)
             arch = "auto"
 
-    pipe.enable_model_cpu_offload()
+    # VRAM management — check available memory
+    if torch.cuda.is_available():
+        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        total_mb = torch.cuda.mem_get_info()[1] // (1024 * 1024)
+        log.info(f"VRAM: {free_mb}MB free / {total_mb}MB total")
+
+        if free_mb < 6000:
+            # Low VRAM — aggressive layer-by-layer offload
+            log.info("Low VRAM: using sequential CPU offload")
+            pipe.enable_sequential_cpu_offload()
+        else:
+            pipe.enable_model_cpu_offload()
+    else:
+        pipe.to("cpu")
+
     if hasattr(pipe, "enable_attention_slicing"):
         pipe.enable_attention_slicing()
+
+    # Enable VAE tiling for safety on low VRAM
+    if hasattr(pipe, 'enable_vae_tiling'):
+        pipe.enable_vae_tiling()
 
     log.info(f"Loaded {arch} checkpoint: {ckpt_name}")
 

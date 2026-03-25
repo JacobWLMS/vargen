@@ -72,6 +72,18 @@
               @mousedown.stop @focus.stop :placeholder="w.label" />
           </template>
 
+          <template v-else-if="w.type === 'toggle'">
+            <div class="slider-row">
+              <span class="slider-label">{{ w.label }}</span>
+              <input type="checkbox"
+                :checked="node.params[w.name] ?? w.default"
+                @change.stop="setWidget(w.name, ($event.target as HTMLInputElement).checked)"
+                @mousedown.stop
+                style="accent-color: var(--accent); width: auto !important; flex: none !important;"
+              />
+            </div>
+          </template>
+
           <template v-else-if="w.type === 'textarea'">
             <label class="wlabel">{{ w.label }}</label>
             <textarea :value="node.params[w.name] ?? w.default"
@@ -134,6 +146,8 @@ function getComboOptions(w: any): string[] {
   if (w.name === 'model' && props.node.type === 'load_upscale_model') return getModelNames('upscale_models')
   if (w.name === 'model' && props.node.type === 'load_controlnet') return getModelNames('controlnet')
   if (w.name === 'model' && props.node.type === 'load_flux') return getModelNames('diffusion_models', 'checkpoints')
+  if (w.name === 'vae') return getModelNames('vae')
+  if (w.name === 'embedding') return getModelNames('embeddings')
   return w.options || []
 }
 function getModelNames(...cats: string[]): string[] {

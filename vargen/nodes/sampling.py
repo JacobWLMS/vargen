@@ -102,12 +102,19 @@ def exec_ksampler(inputs, widgets, ctx):
 
     log.info(f"KSampler: {steps}steps cfg={cfg} {sampler}/{scheduler} denoise={denoise} seed={seed} {width}x{height}")
 
+    batch_size = int(widgets.get("batch_size", 1))
+    guidance_rescale = float(widgets.get("guidance_rescale", 0.0))
+
     kwargs = {
         "num_inference_steps": steps,
         "guidance_scale": cfg,
         "generator": generator,
         "output_type": "latent",
+        "num_images_per_prompt": batch_size,
     }
+
+    if guidance_rescale > 0:
+        kwargs["guidance_rescale"] = guidance_rescale
 
     # Use pre-encoded conditioning
     has_embeds = positive and "prompt_embeds" in positive
@@ -124,6 +131,19 @@ def exec_ksampler(inputs, widgets, ctx):
         neg_text = negative.get("text", "") if negative else ""
         if neg_text:
             kwargs["negative_prompt"] = neg_text
+
+    # Pass IP-Adapter image if loaded
+    ip_image = inputs.get("_ip_adapter_image")
+    if ip_image is not None:
+        kwargs["ip_adapter_image"] = ip_image
+
+    # Pass ControlNet image if applied
+    cn_image = inputs.get("_cn_image")
+    if cn_image is not None:
+        kwargs["image"] = cn_image
+        kwargs["controlnet_conditioning_scale"] = inputs.get("_cn_strength", 0.8)
+        kwargs["control_guidance_start"] = inputs.get("_cn_start", 0.0)
+        kwargs["control_guidance_end"] = inputs.get("_cn_end", 1.0)
 
     if denoise < 1.0 and image_input is not None:
         kwargs["image"] = image_input
@@ -159,6 +179,8 @@ register_node(NodeTypeDef(
         WidgetDef("scheduler", "combo", default="normal", options=SCHEDULERS, label="Scheduler"),
         WidgetDef("denoise", "slider", default=1.0, min=0, max=1, step=0.01, label="Denoise"),
         WidgetDef("clip_skip", "slider", default=0, min=0, max=12, step=1, label="CLIP Skip"),
+        WidgetDef("batch_size", "slider", default=1, min=1, max=16, step=1, label="Batch Size"),
+        WidgetDef("guidance_rescale", "slider", default=0.0, min=0, max=1, step=0.05, label="CFG Rescale"),
     ],
     execute=exec_ksampler, color="#e88a2a",
     description="Sample from model with full scheduler/sampler control. Outputs LATENT.",
