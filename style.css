@@ -7,6 +7,7 @@
   --correct: #538d4e;
   --present: #b59f3b;
   --absent: #3a3a3c;
+  --accent: #7cc5ff;
   --tile-size: 56px;
   --pool-tile: 50px;
 }
@@ -20,18 +21,20 @@ body {
   min-height: 100dvh;
   display: flex;
   justify-content: center;
+  overflow-x: hidden;
 }
 
 #app {
   width: 100%;
-  max-width: 500px;
+  max-width: 520px;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 0 12px;
+  min-height: 100dvh;
 }
 
-/* Header */
+/* ── Header ── */
 header {
   width: 100%;
   display: flex;
@@ -42,10 +45,15 @@ header {
 }
 
 header h1 {
-  font-size: 2.2rem;
+  font-size: 1.8rem;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+.header-right {
+  display: flex;
+  gap: 6px;
 }
 
 .icon-btn {
@@ -69,15 +77,147 @@ header h1 {
   font-size: 0.85rem;
   margin-top: 6px;
   letter-spacing: 0.03em;
+  min-height: 1.3em;
 }
 
-/* Letter Pool */
-#letter-pool {
+/* ── Sidebar / Hamburger Menu ── */
+#menu-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 800;
+  transition: opacity 0.25s ease;
+}
+#menu-overlay.hidden { display: none; }
+
+#sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  height: 100dvh;
+  background: #1a1a1b;
+  border-right: 1px solid var(--border);
+  z-index: 850;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-y: auto;
+}
+#sidebar.open { transform: translateX(0); }
+
+.sidebar-header {
+  padding: 24px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-header h2 {
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.sidebar-sub {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+}
+
+.sidebar-games {
+  flex: 1;
+  padding: 12px 0;
+}
+
+.game-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 20px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-left: 3px solid transparent;
+}
+.game-card:hover { background: rgba(255,255,255,0.04); }
+.game-card.active {
+  background: rgba(124, 197, 255, 0.08);
+  border-left-color: var(--accent);
+}
+
+.game-card-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.game-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.game-card-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 2px;
+}
+.game-card-desc {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+
+.game-card-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--correct);
+  color: white;
+  flex-shrink: 0;
+}
+
+.sidebar-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-link {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 8px 0;
+  width: 100%;
+  text-align: left;
+  transition: color 0.15s;
+}
+.sidebar-link:hover { color: var(--text); }
+
+/* ── Game Container ── */
+#game-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 8px;
+  flex: 1;
+}
+
+/* ── Shared game elements ── */
+
+/* Letter Pool (Letter Pool game) */
+.letter-pool {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
-  margin-top: 20px;
+  margin-top: 14px;
   padding: 14px 10px;
   background: var(--bg-secondary);
   border-radius: 12px;
@@ -112,8 +252,8 @@ header h1 {
 .pool-tile.pool-present { border-color: var(--present); background: rgba(181, 159, 59, 0.2); }
 .pool-tile.pool-absent { border-color: var(--absent); opacity: 0.3; }
 
-/* Guess Grid */
-#guess-grid {
+/* Guess Grid (shared across games) */
+.guess-grid {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -178,7 +318,7 @@ header h1 {
 .tile.win-bounce { animation: bounce 0.6s ease; }
 
 /* Action Bar */
-#action-bar {
+.action-bar {
   display: flex;
   gap: 10px;
   margin-top: 16px;
@@ -200,11 +340,180 @@ header h1 {
 }
 .action-btn:hover { filter: brightness(1.15); }
 .action-btn:active { transform: scale(0.97); }
-
 .action-btn.primary { background: var(--correct); color: white; }
 .action-btn.secondary { background: #3a3a3c; color: #ccc; }
 
-/* Toast */
+/* ── Cipher Game ── */
+.cipher-display {
+  width: 100%;
+  max-width: 440px;
+  margin-top: 16px;
+  padding: 20px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.cipher-text {
+  font-family: 'Courier New', monospace;
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: #ff6b9d;
+  margin-bottom: 8px;
+}
+
+.cipher-hint {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.cipher-arrow {
+  font-size: 1.4rem;
+  color: var(--text-dim);
+  margin: 8px 0;
+}
+
+/* ── Grid Game (Equation Grid) ── */
+.eq-grid {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+}
+
+.eq-grid-5 {
+  grid-template-columns: repeat(5, var(--tile-size));
+  grid-template-rows: repeat(5, var(--tile-size));
+}
+
+.eq-cell {
+  width: var(--tile-size);
+  height: var(--tile-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.3rem;
+  border-radius: 6px;
+  user-select: none;
+}
+
+.eq-cell.number {
+  background: #2c2c2e;
+  border: 2px solid var(--border);
+  color: var(--text);
+}
+
+.eq-cell.given {
+  background: #2c2c2e;
+  border: 2px solid #555;
+  color: #aaa;
+}
+
+.eq-cell.operator {
+  color: #ff6b9d;
+  font-size: 1.4rem;
+}
+
+.eq-cell.result {
+  color: #ffd866;
+  font-weight: 800;
+}
+
+.eq-cell.input {
+  background: #1e2a3a;
+  border: 2px solid var(--accent);
+  cursor: pointer;
+  color: var(--accent);
+}
+.eq-cell.input.selected {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.3);
+}
+.eq-cell.input.filled {
+  color: var(--text);
+  border-color: #666;
+}
+
+.eq-cell.eq-correct { background: var(--correct); border-color: var(--correct); color: white; }
+.eq-cell.eq-wrong { background: #8b2020; border-color: #8b2020; color: white; }
+
+.eq-cell.empty {
+  background: transparent;
+  border: none;
+}
+
+.numpad {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 16px;
+  max-width: 300px;
+}
+
+.num-key {
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 6px;
+  background: var(--text-dim);
+  color: var(--text);
+  font-size: 1.2rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.num-key:hover { filter: brightness(1.2); }
+.num-key:active { transform: scale(0.95); }
+.num-key.wide { width: 72px; font-size: 0.85rem; }
+
+/* ── Chain Game (Word Ladder) ── */
+.chain-endpoints {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 14px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.chain-word {
+  font-family: 'Courier New', monospace;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.chain-word.start { color: var(--accent); }
+.chain-word.end { color: #ffd866; }
+
+.chain-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+.chain-arrow svg {
+  width: 32px;
+  height: 16px;
+  fill: var(--text-dim);
+}
+
+.chain-steps-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 10px;
+}
+
+/* ── Toast ── */
 #toast-container {
   position: fixed;
   top: 70px;
@@ -237,7 +546,7 @@ header h1 {
   to { opacity: 0; }
 }
 
-/* Modals */
+/* ── Modals ── */
 .modal {
   position: fixed;
   inset: 0;
@@ -332,8 +641,9 @@ header h1 {
 
 #share-section { text-align: center; margin-top: 12px; }
 
-/* Responsive */
+/* ── Responsive ── */
 @media (max-width: 400px) {
   :root { --tile-size: 48px; --pool-tile: 44px; }
-  header h1 { font-size: 1.7rem; }
+  header h1 { font-size: 1.5rem; }
+  #sidebar { width: 260px; }
 }
