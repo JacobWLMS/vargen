@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VarGen — The Word Puzzle</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔤</text></svg>">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <button id="btn-help" class="icon-btn" aria-label="How to play">?</button>
+      <h1>VarGen</h1>
+      <button id="btn-stats" class="icon-btn" aria-label="Statistics">📊</button>
+    </header>
+
+    <p id="tagline">Arrange the letters. Find the word.</p>
+
+    <div id="letter-pool">
+      <!-- 8 draggable letter tiles rendered by JS -->
+    </div>
+
+    <div id="guess-grid">
+      <!-- 6 rows of 5 tiles rendered by JS -->
+    </div>
+
+    <div id="action-bar">
+      <button id="btn-clear" class="action-btn secondary">Clear</button>
+      <button id="btn-submit" class="action-btn primary">Submit</button>
+    </div>
+
+    <div id="toast-container"></div>
+  </div>
+
+  <!-- Help Modal -->
+  <div id="modal-help" class="modal hidden">
+    <div class="modal-content">
+      <button class="modal-close">&times;</button>
+      <h2>How to Play</h2>
+      <p>Find the hidden <strong>5-letter word</strong> in 6 guesses.</p>
+      <ul>
+        <li>You're given <b>8 letter tiles</b> — 5 are correct, 3 are decoys.</li>
+        <li>Tap letters from the pool to build your guess.</li>
+        <li>Each guess must be a <b>valid English word</b>.</li>
+        <li>After each guess, tiles change color:</li>
+      </ul>
+      <div class="examples">
+        <div class="example-row">
+          <span class="tile-example correct">S</span>
+          <span class="desc"><b>Green</b> — Correct letter, correct spot.</span>
+        </div>
+        <div class="example-row">
+          <span class="tile-example present">A</span>
+          <span class="desc"><b>Yellow</b> — Correct letter, wrong spot.</span>
+        </div>
+        <div class="example-row">
+          <span class="tile-example absent">X</span>
+          <span class="desc"><b>Gray</b> — Letter not in the word.</span>
+        </div>
+      </div>
+      <p class="hint-text">The pool always contains the answer's letters plus 3 extras — use logic to eliminate!</p>
+      <p class="hint-text">A new puzzle every day.</p>
+    </div>
+  </div>
+
+  <!-- Stats Modal -->
+  <div id="modal-stats" class="modal hidden">
+    <div class="modal-content">
+      <button class="modal-close">&times;</button>
+      <h2>Statistics</h2>
+      <div id="stats-body">
+        <div class="stat-item">
+          <div class="stat-num" id="stat-played">0</div>
+          <div class="stat-label">Played</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num" id="stat-win-pct">0</div>
+          <div class="stat-label">Win %</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num" id="stat-streak">0</div>
+          <div class="stat-label">Streak</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num" id="stat-max-streak">0</div>
+          <div class="stat-label">Max Streak</div>
+        </div>
+      </div>
+      <h3>Guess Distribution</h3>
+      <div id="distribution"></div>
+      <div id="share-section" class="hidden">
+        <button id="btn-share" class="action-btn primary">Share Results</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="words.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
