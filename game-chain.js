@@ -1,5 +1,5 @@
 // ── Word Chain: morph start word into end word one letter at a time ──
-// Pre-computed valid chains ensure every puzzle is solvable
+// Uses runtime BFS to generate chains — supports unlimited daily puzzles
 VarGen.registerGame("chain", {
   name: "Word Chain",
   icon: "🔗",
@@ -36,67 +36,129 @@ VarGen.registerGame("chain", {
     <p class="hint-text">A new chain every day.</p>
   `,
 
-  // Pre-defined chains (start -> steps -> end), all verified as valid words
-  // Each chain has length 4 (start + 3 intermediate + end = 5 words, 4 steps)
-  chains: [
-    ["crane", "crate", "grate", "grape", "drape"],
-    ["brave", "grave", "grape", "gripe", "grime"],
-    ["globe", "glove", "grove", "grave", "brave"],
-    ["glaze", "graze", "grace", "trace", "truce"],
-    ["grain", "groin", "grown", "growl", "prowl"],
-    ["drove", "grove", "grave", "graze", "glaze"],
-    ["blaze", "glaze", "graze", "grace", "trace"],
-    ["crisp", "crimp", "crime", "grime", "gripe"],
-    ["brine", "brink", "blink", "blank", "plank"],
-    ["flint", "faint", "paint", "point", "joint"],
-    ["drape", "grape", "grope", "grove", "drove"],
-    ["prime", "grime", "gripe", "grape", "grace"],
-    ["irate", "grate", "graze", "glaze", "blaze"],
-    ["scout", "shout", "short", "shore", "store"],
-    ["cider", "rider", "river", "rover", "hover"],
-    ["snare", "spare", "space", "spice", "spine"],
-    ["shawl", "shall", "stall", "stale", "stare"],
-    ["truce", "trace", "grace", "grate", "irate"],
-    ["stave", "stale", "stall", "shall", "shawl"],
-    ["blink", "brink", "brine", "bride", "pride"],
-    ["trace", "grace", "grave", "crave", "crane"],
-    ["pride", "prime", "crime", "crimp", "crisp"],
-    ["clasp", "class", "glass", "gloss", "floss"],
-    ["whale", "whole", "whose", "chose", "close"],
-    ["joker", "poker", "power", "lower", "lover"],
-    ["trick", "brick", "brink", "blink", "blank"],
-    ["hitch", "pitch", "patch", "match", "march"],
-    ["rover", "lover", "lower", "tower", "towel"],
-    ["plank", "blank", "blink", "brink", "bring"],
-    ["hover", "lover", "lower", "power", "poker"],
-    ["moose", "mouse", "house", "horse", "worse"],
-    ["leapt", "least", "lease", "leave", "heave"],
-    ["token", "woken", "women", "woman", "roman"],
-    ["marsh", "march", "match", "watch", "witch"],
-    ["joint", "point", "paint", "faint", "feint"],
-    ["rouse", "house", "horse", "worse", "worst"],
-    ["patch", "match", "march", "marsh", "harsh"],
-    ["feast", "least", "lease", "leave", "weave"],
-    ["route", "rouse", "mouse", "moose", "loose"],
-    ["plant", "plank", "blank", "bland", "blend"],
-  ],
+  // Build word graph once (lazy, cached)
+  _graph: null,
+  _wordList: null,
+
+  _buildGraph() {
+    if (this._graph) return;
+
+    // Collect all 5-letter words
+    const words = [...VALID_WORDS].filter((w) => w.length === 5);
+    this._wordList = words;
+
+    // Build adjacency using wildcard patterns for O(n) neighbor lookup
+    // e.g. "crane" -> ["_rane", "c_ane", "cr_ne", "cra_e", "cran_"]
+    const buckets = {};
+    for (const word of words) {
+      for (let i = 0; i < 5; i++) {
+        const pattern = word.slice(0, i) + "_" + word.slice(i + 1);
+        if (!buckets[pattern]) buckets[pattern] = [];
+        buckets[pattern].push(word);
+      }
+    }
+
+    // Build adjacency list
+    const graph = {};
+    for (const word of words) {
+      graph[word] = new Set();
+    }
+    for (const bucket of Object.values(buckets)) {
+      for (let i = 0; i < bucket.length; i++) {
+        for (let j = i + 1; j < bucket.length; j++) {
+          graph[bucket[i]].add(bucket[j]);
+          graph[bucket[j]].add(bucket[i]);
+        }
+      }
+    }
+
+    this._graph = graph;
+  },
+
+  // BFS to find shortest path between two words
+  _bfs(start, end) {
+    if (!this._graph[start] || !this._graph[end]) return null;
+    if (start === end) return [start];
+
+    const visited = new Set([start]);
+    const queue = [[start]];
+
+    while (queue.length > 0) {
+      const path = queue.shift();
+      const current = path[path.length - 1];
+
+      for (const neighbor of this._graph[current]) {
+        if (visited.has(neighbor)) continue;
+        const newPath = [...path, neighbor];
+        if (neighbor === end) return newPath;
+        if (newPath.length > 6) continue; // Cap at 6 to avoid long searches
+        visited.add(neighbor);
+        queue.push(newPath);
+      }
+    }
+    return null;
+  },
+
+  // Generate a daily chain using seeded RNG + BFS
+  _generateChain(rng) {
+    this._buildGraph();
+
+    // Pick start words from ANSWER_WORDS (more interesting/common)
+    const candidates = ANSWER_WORDS.filter(
+      (w) => w.length === 5 && this._graph[w] && this._graph[w].size >= 3
+    );
+
+    // Try random pairs until we find one with a path of length 4-5 (3-4 steps)
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const startIdx = Math.floor(rng() * candidates.length);
+      const endIdx = Math.floor(rng() * candidates.length);
+      if (startIdx === endIdx) continue;
+
+      const start = candidates[startIdx];
+      const end = candidates[endIdx];
+      const path = this._bfs(start, end);
+
+      if (path && path.length >= 4 && path.length <= 5) {
+        return path;
+      }
+    }
+
+    // Fallback: find any working pair with a 4-step path
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const start = candidates[Math.floor(rng() * candidates.length)];
+      // Pick a random neighbor chain via BFS with depth limit
+      const visited = new Set([start]);
+      let current = start;
+      const path = [start];
+      for (let step = 0; step < 4; step++) {
+        const neighbors = [...this._graph[current]].filter((n) => !visited.has(n));
+        if (neighbors.length === 0) break;
+        current = neighbors[Math.floor(rng() * neighbors.length)];
+        visited.add(current);
+        path.push(current);
+      }
+      if (path.length === 5) return path;
+    }
+
+    // Ultimate fallback
+    return ["crane", "crate", "grate", "grape", "drape"];
+  },
 
   init() {
     const dayIndex = VarGen.getDayIndex();
     const rng = VarGen.mulberry32(dayIndex * 99991);
 
-    // Pick today's chain
-    const chainIdx = dayIndex % this.chains.length;
-    const chain = this.chains[chainIdx];
+    // Generate today's chain
+    const chain = this._generateChain(rng);
     const startWord = chain[0].toUpperCase();
     const endWord = chain[chain.length - 1].toUpperCase();
-    const STEPS = chain.length - 1; // number of steps needed
+    const STEPS = chain.length - 1;
     const WORD_LENGTH = 5;
 
     let currentStep = 0;
     let currentCol = 0;
     let currentGuess = Array(WORD_LENGTH).fill("");
-    let submittedSteps = []; // { letters, states }
+    let submittedSteps = [];
     let gameOver = false;
     let lastWord = startWord;
 
@@ -182,7 +244,7 @@ VarGen.registerGame("chain", {
         gridEl.appendChild(row);
       }
 
-      // Target word (shown dimmed if not reached)
+      // Target word
       const endRow = document.createElement("div");
       endRow.className = "guess-row";
       for (let c = 0; c < WORD_LENGTH; c++) {
@@ -309,7 +371,6 @@ VarGen.registerGame("chain", {
 
     function shakeCurrentRow() {
       const rows = container.querySelectorAll(".guess-row");
-      // Current input row = submittedSteps.length + 1 (for start row)
       const rowEl = rows[submittedSteps.length + 1];
       if (rowEl) {
         rowEl.classList.add("shake");

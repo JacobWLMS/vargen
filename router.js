@@ -4,7 +4,7 @@
   const $ = VarGen.$;
   const $$ = VarGen.$$;
 
-  const GAME_ORDER = ["pool", "cipher", "grid", "chain"];
+  const GAME_ORDER = ["pool", "cipher", "grid", "chain", "chromax", "signals", "memory"];
   const LAST_GAME_KEY = "vargen-last-game";
 
   // ── Sidebar rendering ──
